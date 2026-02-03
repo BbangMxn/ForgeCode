@@ -5,7 +5,6 @@ use crate::task::{ExecutionMode, Task, TaskResult};
 use async_trait::async_trait;
 use bollard::container::{
     Config, CreateContainerOptions, RemoveContainerOptions, StartContainerOptions,
-    WaitContainerOptions,
 };
 use bollard::exec::{CreateExecOptions, StartExecResults};
 use bollard::Docker;

@@ -6,6 +6,7 @@ use tokio::sync::mpsc;
 
 /// TUI Events
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum TuiEvent {
     /// Key press
     Key(KeyEvent),

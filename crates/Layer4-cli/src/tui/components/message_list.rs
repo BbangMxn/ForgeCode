@@ -43,6 +43,7 @@ pub struct MessageList {
     scroll: u16,
 }
 
+#[allow(dead_code)]
 impl MessageList {
     /// Create a new message list
     pub fn new() -> Self {
@@ -102,7 +103,7 @@ impl MessageList {
                 ),
                 MessageRole::Tool => {
                     if let Some(ref info) = msg.tool_info {
-                        let status_symbol = match info.status {
+                        let _status_symbol = match info.status {
                             ToolStatus::Running => "⟳",
                             ToolStatus::Success => "✓",
                             ToolStatus::Error => "✗",

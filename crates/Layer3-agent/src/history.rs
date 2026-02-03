@@ -1,7 +1,6 @@
 //! Message history management
 
-use forge_provider::{Message, MessageRole, ToolCall, ToolResult};
-use serde::{Deserialize, Serialize};
+use forge_provider::{Message, MessageRole, ToolCall};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;

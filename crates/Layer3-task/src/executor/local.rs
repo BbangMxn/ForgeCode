@@ -70,7 +70,7 @@ impl Executor for LocalExecutor {
         // Wait for completion with timeout
         let result = {
             let mut processes = self.processes.lock().await;
-            if let Some(mut child) = processes.remove(&task.id.to_string()) {
+            if let Some(child) = processes.remove(&task.id.to_string()) {
                 match timeout(task.timeout, child.wait_with_output()).await {
                     Ok(Ok(output)) => {
                         let stdout = String::from_utf8_lossy(&output.stdout);

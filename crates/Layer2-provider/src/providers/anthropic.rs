@@ -14,7 +14,6 @@ use futures::{Stream, StreamExt};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::pin::Pin;
-use tracing::{debug, error};
 
 const ANTHROPIC_API_URL: &str = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
@@ -491,6 +490,7 @@ struct AnthropicUsage {
 // SSE Event types
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type")]
+#[allow(dead_code)]
 enum AnthropicStreamEvent {
     #[serde(rename = "message_start")]
     MessageStart { message: MessageStartData },
@@ -522,6 +522,7 @@ struct MessageStartData {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct MessageDeltaData {
     stop_reason: Option<String>,
 }
@@ -532,6 +533,7 @@ struct MessageDeltaUsage {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct ErrorData {
     message: String,
 }

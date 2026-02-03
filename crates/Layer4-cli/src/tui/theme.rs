@@ -3,6 +3,7 @@
 use ratatui::style::{Color, Modifier, Style};
 
 /// Theme colors and styles
+#[allow(dead_code)]
 pub struct Theme {
     /// Primary accent color
     pub primary: Color,
@@ -52,6 +53,7 @@ impl Default for Theme {
     }
 }
 
+#[allow(dead_code)]
 impl Theme {
     /// Normal text style
     pub fn text(&self) -> Style {

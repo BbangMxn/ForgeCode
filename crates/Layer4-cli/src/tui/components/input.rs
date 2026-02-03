@@ -1,6 +1,6 @@
 //! Input box component
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     layout::Rect,
     style::{Color, Style},
@@ -9,6 +9,7 @@ use ratatui::{
 };
 
 /// Text input box
+#[allow(dead_code)]
 pub struct InputBox {
     /// Current input text
     content: String,
@@ -23,6 +24,7 @@ pub struct InputBox {
     placeholder: String,
 }
 
+#[allow(dead_code)]
 impl InputBox {
     /// Create a new input box
     pub fn new() -> Self {

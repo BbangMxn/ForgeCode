@@ -11,7 +11,7 @@ use forge_tool::ToolRegistry;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Style},
-    widgets::{Block, Borders, Paragraph},
+    widgets::Paragraph,
     Frame,
 };
 use std::sync::Arc;
@@ -165,7 +165,7 @@ impl ChatPage {
                 });
             }
             AgentEvent::ToolComplete {
-                tool_name,
+                
                 result,
                 success,
                 ..

@@ -3,7 +3,7 @@
 use crate::context::AgentContext;
 use crate::history::MessageHistory;
 use forge_foundation::{Error, Result};
-use forge_provider::{ProviderError, StreamEvent, ToolCall};
+use forge_provider::{StreamEvent, ToolCall};
 use futures::StreamExt;
 use std::sync::Arc;
 use tokio::sync::mpsc;
