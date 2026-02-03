@@ -16,7 +16,27 @@
       "WebFetch(domain:www.codeant.ai)",
       "WebFetch(domain:lib.rs)",
       "Bash(cargo check:*)",
-      "WebFetch(domain:gist.github.com)"
+      "WebFetch(domain:gist.github.com)",
+      "WebFetch(domain:docs.continue.dev)",
+      "WebFetch(domain:cursor.com)",
+      "Bash(powershell.exe -NoProfile -Command \"cd ''C:\\\\Users\\\\jixso\\\\Desktop\\\\zed\\\\ForgeCode''; cargo check -p forge-foundation 2>&1\")",
+      "WebFetch(domain:www.vtrivedy.com)",
+      "WebFetch(domain:microsoft.github.io)",
+      "Bash(where:*)",
+      "Bash(/c/Users/jixso/.cargo/bin/cargo:*)",
+      "Bash(cargo build:*)",
+      "Bash(cmd /c \"cargo build -p forge-core 2>&1\")",
+      "Bash(powershell -Command \"cd C:/Users/jixso/Desktop/zed/ForgeCode; cargo build -p forge-core 2>&1\")",
+      "Bash(powershell -Command \"$env:Path = [System.Environment]::GetEnvironmentVariable\\(''Path'',''Machine''\\) + '';'' + [System.Environment]::GetEnvironmentVariable\\(''Path'',''User''\\); cd C:/Users/jixso/Desktop/zed/ForgeCode; cargo build -p forge-core 2>&1\")",
+      "Bash(C:/Users/jixso/.cargo/bin/cargo.exe build:*)",
+      "Bash(C:/Users/jixso/.cargo/bin/cargo.exe test:*)",
+      "Bash(wc -l \"C:\\\\Users\\\\jixso\\\\Desktop\\\\zed\\\\ForgeCode\\\\crates\\\\Layer1-foundation\\\\src\"/**/*.rs)",
+      "Bash(wc -l \"C:\\\\Users\\\\jixso\\\\Desktop\\\\zed\\\\ForgeCode\\\\crates\\\\Layer2-core\\\\src\"/**/*.rs)",
+      "Bash(wc -l \"C:\\\\Users\\\\jixso\\\\Desktop\\\\zed\\\\ForgeCode\\\\crates\\\\Layer2-provider\\\\src\"/**/*.rs)",
+      "Bash(wc -l \"C:\\\\Users\\\\jixso\\\\Desktop\\\\zed\\\\ForgeCode\\\\crates\\\\Layer2-tool\\\\src\"/**/*.rs)",
+      "Bash(find:*)",
+      "WebFetch(domain:docs.docker.com)",
+      "WebFetch(domain:developer.nvidia.com)"
     ]
   }
 }

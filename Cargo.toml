@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/Layer1-foundation",
+    "crates/Layer2-core",
     "crates/Layer2-provider",
     "crates/Layer2-tool",
     "crates/Layer2-task",
@@ -71,6 +72,7 @@ shlex = "1.3"
 
 # Internal crates
 forge-foundation = { path = "crates/Layer1-foundation" }
+forge-core = { path = "crates/Layer2-core" }
 forge-provider = { path = "crates/Layer2-provider" }
 forge-tool = { path = "crates/Layer2-tool" }
 forge-task = { path = "crates/Layer2-task" }

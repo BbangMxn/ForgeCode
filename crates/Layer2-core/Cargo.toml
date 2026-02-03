@@ -1,0 +1,49 @@
+[package]
+name = "forge-core"
+description = "Core runtime for ForgeCode - LLM providers, tools, and shell execution"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+# Internal - Layer1 완전 활용
+forge-foundation = { workspace = true }
+
+# Async
+tokio = { workspace = true }
+tokio-util = { version = "0.7", features = ["io"] }
+async-trait = { workspace = true }
+async-stream = { workspace = true }
+futures = { workspace = true }
+
+# HTTP (for providers)
+reqwest = { workspace = true }
+reqwest-eventsource = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Error Handling
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+
+# Utilities
+uuid = { workspace = true }
+glob = { workspace = true }
+ignore = { workspace = true }
+which = { workspace = true }
+regex = { workspace = true }
+chrono = { workspace = true }
+
+# PTY and Shell
+portable-pty = { workspace = true }
+strip-ansi-escapes = { workspace = true }
+shlex = { workspace = true }
+
+# LSP - 경량 구현 (lsp-types 없이 직접 구현)
+# url = "2.5"  # 파일 URI 처리용 (필요시 추가)
