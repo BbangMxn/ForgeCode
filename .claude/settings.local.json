@@ -14,7 +14,9 @@
       "WebFetch(domain:crates.io)",
       "WebFetch(domain:dev.to)",
       "WebFetch(domain:www.codeant.ai)",
-      "WebFetch(domain:lib.rs)"
+      "WebFetch(domain:lib.rs)",
+      "Bash(cargo check:*)",
+      "WebFetch(domain:gist.github.com)"
     ]
   }
 }
