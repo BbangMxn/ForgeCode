@@ -1,0 +1,39 @@
+[package]
+name = "forge-tool"
+description = "Tool system for ForgeCode - builtin tools, MCP, plugins"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+# Internal
+forge-foundation = { workspace = true }
+
+# Async
+tokio = { workspace = true }
+async-trait = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Error Handling
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+
+# Utilities
+uuid = { workspace = true }
+glob = { workspace = true }
+ignore = { workspace = true }
+which = { workspace = true }
+regex = { workspace = true }
+chrono = { workspace = true }
+
+# PTY and Shell (for forgecmd)
+portable-pty = { workspace = true }
+strip-ansi-escapes = { workspace = true }
+shlex = { workspace = true }

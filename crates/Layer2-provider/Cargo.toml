@@ -1,0 +1,36 @@
+[package]
+name = "forge-provider"
+description = "LLM provider abstraction layer for ForgeCode"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+# Internal
+forge-foundation = { workspace = true }
+
+# Async
+tokio = { workspace = true }
+tokio-util = { version = "0.7", features = ["io"] }
+async-trait = { workspace = true }
+async-stream = { workspace = true }
+futures = { workspace = true }
+
+# HTTP
+reqwest = { workspace = true }
+reqwest-eventsource = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Error Handling
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+
+# Utilities
+uuid = { workspace = true }

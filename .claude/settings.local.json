@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__acp__Bash",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:opencode.ai)",
+      "mcp__acp__Write",
+      "mcp__acp__Edit",
+      "WebFetch(domain:api.github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:)",
+      "WebFetch(domain:docs.rs)",
+      "WebFetch(domain:kotrotsos.medium.com)",
+      "WebFetch(domain:crates.io)",
+      "WebFetch(domain:dev.to)",
+      "WebFetch(domain:www.codeant.ai)",
+      "WebFetch(domain:lib.rs)"
+    ]
+  }
+}

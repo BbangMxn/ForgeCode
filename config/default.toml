@@ -1,0 +1,121 @@
+# ForgeCode Default Configuration
+# Copy this file to ~/.config/forgecode/config.toml or .forgecode/config.toml
+
+# =============================================================================
+# Provider Configuration
+# =============================================================================
+
+[providers]
+# Default provider to use (anthropic, openai, gemini, ollama)
+default = "anthropic"
+
+# Anthropic (Claude) configuration
+[providers.anthropic]
+# API key - can also be set via ANTHROPIC_API_KEY environment variable
+# api_key = "sk-ant-..."
+model = "claude-sonnet-4-20250514"
+max_tokens = 8192
+
+# OpenAI configuration
+[providers.openai]
+# api_key = "sk-..."
+model = "gpt-4o"
+max_tokens = 8192
+
+# Google Gemini configuration
+[providers.gemini]
+# api_key = "..."
+model = "gemini-2.0-flash"
+max_tokens = 8192
+
+# Ollama (local) configuration
+[providers.ollama]
+base_url = "http://localhost:11434"
+model = "llama3"
+
+# =============================================================================
+# Execution Configuration
+# =============================================================================
+
+[execution]
+# Default execution mode: "local" | "container" | "ask"
+default_mode = "local"
+
+# Allow local execution (if false, always use container)
+allow_local = true
+
+# Container settings
+[execution.container]
+default_image = "forgecode/workspace:latest"
+auto_cleanup = true
+timeout_secs = 120
+memory_limit = "2g"
+
+# Local execution settings
+[execution.local]
+# Paths that are allowed for file operations (empty = allow all within working dir)
+allowed_paths = []
+
+# Paths that are always blocked
+blocked_paths = [
+    "~/.ssh",
+    "~/.aws",
+    "~/.config/forgecode/secrets",
+]
+
+# Commands that are blocked for security
+blocked_commands = [
+    "rm -rf /",
+    "sudo rm -rf",
+    ":(){:|:&};:",
+]
+
+# Commands that require user confirmation
+confirm_commands = [
+    "rm",
+    "mv",
+    "chmod",
+    "chown",
+]
+
+# =============================================================================
+# Tool Configuration
+# =============================================================================
+
+[tools]
+# Disabled tools (by name)
+disabled = []
+
+# Tool-specific execution mode overrides
+# [tools.execution_mode]
+# bash = "container"
+# write = "ask"
+
+# =============================================================================
+# MCP Server Configuration
+# =============================================================================
+
+# Example: GitHub MCP server
+# [mcp.github]
+# type = "local"
+# enabled = true
+# command = ["npx", "-y", "@modelcontextprotocol/server-github"]
+# [mcp.github.environment]
+# GITHUB_TOKEN = "${GITHUB_TOKEN}"
+
+# Example: Remote MCP server
+# [mcp.sentry]
+# type = "remote"
+# enabled = true
+# url = "https://mcp.sentry.dev/mcp"
+
+# =============================================================================
+# TUI Configuration
+# =============================================================================
+
+[tui]
+# Theme (default, dark, light)
+theme = "default"
+
+# Show token usage in status bar
+show_tokens = true
