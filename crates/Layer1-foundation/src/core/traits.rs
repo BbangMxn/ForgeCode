@@ -137,15 +137,14 @@ impl ToolResult {
 /// 각 도구는 자신의 권한을 등록하고, 실행 시 권한 검사를 받습니다.
 #[async_trait]
 pub trait Tool: Send + Sync {
+    /// 도구 이름 (고유 식별자) - 필수 구현
+    ///
+    /// 이 메서드는 반드시 구현해야 합니다.
+    /// Tool registry에서 도구를 식별하는 데 사용됩니다.
+    fn name(&self) -> &str;
+
     /// 도구 메타데이터 반환
     fn meta(&self) -> ToolMeta;
-
-    /// 도구 이름 (편의 메서드)
-    fn name(&self) -> &str {
-        // 기본 구현은 trait object에서 작동하지 않으므로
-        // 구현체에서 오버라이드해야 함
-        ""
-    }
 
     /// JSON 스키마 반환 (MCP 호환)
     fn schema(&self) -> Value;

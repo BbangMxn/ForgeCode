@@ -4,6 +4,7 @@
 //! - 새 파일 생성
 //! - 기존 파일 덮어쓰기
 //! - 부모 디렉토리 자동 생성
+//! - 경로 보안 검증 (path traversal 방지)
 
 use async_trait::async_trait;
 use forge_foundation::{
@@ -14,6 +15,8 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::fs;
 use std::path::Path;
+
+use crate::tool::security::{is_sensitive_path, PathValidator};
 
 /// Write 도구 입력
 #[derive(Debug, Deserialize)]
@@ -44,43 +47,6 @@ impl WriteTool {
 
     /// 도구 이름
     pub const NAME: &'static str = "write";
-
-    /// 민감한 파일인지 확인
-    fn is_sensitive_path(path: &str) -> bool {
-        let sensitive_patterns = [
-            ".env",
-            ".ssh",
-            "credentials",
-            "secrets",
-            ".pem",
-            ".key",
-            "_rsa",
-            ".aws",
-            ".config/gcloud",
-            "passwd",
-            "shadow",
-        ];
-
-        let path_lower = path.to_lowercase();
-        sensitive_patterns.iter().any(|p| path_lower.contains(p))
-    }
-
-    /// 시스템 파일인지 확인
-    fn is_system_path(path: &str) -> bool {
-        let system_patterns = [
-            "/etc/",
-            "/usr/",
-            "/bin/",
-            "/sbin/",
-            "/boot/",
-            "/proc/",
-            "/sys/",
-            "C:\\Windows\\",
-            "C:\\Program Files\\",
-        ];
-
-        system_patterns.iter().any(|p| path.starts_with(p))
-    }
 }
 
 impl Default for WriteTool {
@@ -145,9 +111,8 @@ impl Tool for WriteTool {
 
     async fn execute(&self, input: Value, context: &dyn ToolContext) -> Result<ToolResult> {
         // 입력 파싱
-        let parsed: WriteInput = serde_json::from_value(input.clone()).map_err(|e| {
-            forge_foundation::Error::InvalidInput(format!("Invalid input: {}", e))
-        })?;
+        let parsed: WriteInput = serde_json::from_value(input.clone())
+            .map_err(|e| forge_foundation::Error::InvalidInput(format!("Invalid input: {}", e)))?;
 
         let path = Path::new(&parsed.file_path);
 
@@ -159,18 +124,23 @@ impl Tool for WriteTool {
             )));
         }
 
-        // 민감한 파일 경고
-        if Self::is_sensitive_path(&parsed.file_path) {
-            return Ok(ToolResult::error(format!(
-                "Cannot write to sensitive file: {}. This could expose credentials or damage security configurations.",
-                parsed.file_path
-            )));
+        // 경로 보안 검증 (path traversal, 위험 경로, 민감 파일 체크)
+        let validator = PathValidator::new().with_allowed_root(context.working_dir());
+
+        let validation = validator.validate(path);
+        if !validation.is_valid() {
+            if let Some(msg) = validation.error_message() {
+                return Ok(ToolResult::error(format!(
+                    "Path security check failed: {}",
+                    msg
+                )));
+            }
         }
 
-        // 시스템 파일 경고
-        if Self::is_system_path(&parsed.file_path) {
+        // 민감한 파일 추가 체크
+        if is_sensitive_path(&parsed.file_path) {
             return Ok(ToolResult::error(format!(
-                "Cannot write to system file: {}. Modifying system files is not allowed.",
+                "Cannot write to sensitive file: {}. This could expose credentials or damage security configurations.",
                 parsed.file_path
             )));
         }
@@ -230,10 +200,7 @@ impl Tool for WriteTool {
 
                 Ok(ToolResult::success(format!(
                     "{} {} ({} bytes, {} lines)",
-                    action,
-                    parsed.file_path,
-                    bytes,
-                    lines
+                    action, parsed.file_path, bytes, lines
                 )))
             }
             Err(e) => Ok(ToolResult::error(format!("Failed to write file: {}", e))),
@@ -272,27 +239,45 @@ mod tests {
         let input = json!({ "file_path": "/tmp/test.txt", "content": "hello" });
         let perm = tool.required_permission(&input);
         assert!(perm.is_some());
-        match perm.unwrap() {
-            PermissionAction::FileWrite { path } => {
-                assert_eq!(path, "/tmp/test.txt");
-            }
-            _ => panic!("Expected FileWrite permission"),
-        }
+        let perm = perm.unwrap();
+        assert!(
+            matches!(&perm, PermissionAction::FileWrite { path } if path == "/tmp/test.txt"),
+            "Expected FileWrite permission, got {:?}",
+            perm
+        );
     }
 
     #[test]
     fn test_sensitive_path_detection() {
-        assert!(WriteTool::is_sensitive_path("/home/user/.env"));
-        assert!(WriteTool::is_sensitive_path("/home/user/.ssh/config"));
-        assert!(WriteTool::is_sensitive_path("/app/credentials.json"));
-        assert!(!WriteTool::is_sensitive_path("/home/user/code.rs"));
+        use crate::tool::security::is_sensitive_path;
+        // Cross-platform tests
+        assert!(is_sensitive_path(".env"));
+        assert!(is_sensitive_path(".ssh/config"));
+        assert!(is_sensitive_path("credentials.json"));
+        assert!(!is_sensitive_path("code.rs"));
     }
 
     #[test]
-    fn test_system_path_detection() {
-        assert!(WriteTool::is_system_path("/etc/passwd"));
-        assert!(WriteTool::is_system_path("/usr/bin/test"));
-        assert!(WriteTool::is_system_path("C:\\Windows\\system32\\test"));
-        assert!(!WriteTool::is_system_path("/home/user/file.txt"));
+    fn test_dangerous_path_detection() {
+        use crate::tool::security::PathValidator;
+        let validator = PathValidator::new();
+
+        // Test with .ssh path which is dangerous on all platforms
+        let dangerous = if cfg!(windows) {
+            std::path::Path::new("C:\\Users\\test\\.ssh\\id_rsa")
+        } else {
+            std::path::Path::new("/home/user/.ssh/id_rsa")
+        };
+        let result = validator.validate(dangerous);
+        assert!(!result.is_valid());
+
+        // Normal path should be valid when no allowed roots set
+        let normal = if cfg!(windows) {
+            std::path::Path::new("C:\\Users\\test\\file.txt")
+        } else {
+            std::path::Path::new("/home/user/file.txt")
+        };
+        let result = validator.validate(normal);
+        assert!(result.is_valid());
     }
 }

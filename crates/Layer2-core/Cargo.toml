@@ -11,7 +11,7 @@ license.workspace = true
 forge-foundation = { workspace = true }
 
 # Async
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "io-std", "io-util", "macros", "time", "sync", "process", "net", "fs"] }
 tokio-util = { version = "0.7", features = ["io"] }
 async-trait = { workspace = true }
 async-stream = { workspace = true }
@@ -24,6 +24,7 @@ reqwest-eventsource = { workspace = true }
 # Serialization
 serde = { workspace = true }
 serde_json = { workspace = true }
+serde_yaml = "0.9"
 
 # Error Handling
 thiserror = { workspace = true }
@@ -39,6 +40,8 @@ ignore = { workspace = true }
 which = { workspace = true }
 regex = { workspace = true }
 chrono = { workspace = true }
+rayon = { workspace = true }
+parking_lot = { workspace = true }
 
 # PTY and Shell
 portable-pty = { workspace = true }
@@ -47,3 +50,14 @@ shlex = { workspace = true }
 
 # LSP - 경량 구현 (lsp-types 없이 직접 구현)
 # url = "2.5"  # 파일 URI 처리용 (필요시 추가)
+
+# Filesystem
+dirs = "5.0"
+
+# URL handling
+url = "2.5"
+urlencoding = "2.1"
+
+[dev-dependencies]
+tokio-test = "0.4"
+tempfile = "3.8"

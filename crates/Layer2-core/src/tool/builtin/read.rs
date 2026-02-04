@@ -4,6 +4,7 @@
 //! - 줄 번호 포함 (cat -n 스타일)
 //! - offset/limit 지원 (대용량 파일 처리)
 //! - 이미지/PDF 등 바이너리 파일 감지
+//! - 경로 보안 검증 (path traversal 방지)
 
 use async_trait::async_trait;
 use forge_foundation::{
@@ -14,6 +15,8 @@ use serde_json::{json, Value};
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
+
+use crate::tool::security::{is_sensitive_path, PathValidator};
 
 /// Read 도구 입력
 #[derive(Debug, Deserialize)]
@@ -48,23 +51,6 @@ impl ReadTool {
     /// 최대 줄 길이 (이 이상은 잘림)
     const MAX_LINE_LENGTH: usize = 2000;
 
-    /// 민감한 경로인지 확인
-    fn is_sensitive_path(path: &str) -> bool {
-        let sensitive_patterns = [
-            ".env",
-            ".ssh",
-            "credentials",
-            "secrets",
-            ".pem",
-            ".key",
-            "_rsa",
-            ".aws",
-            ".config/gcloud",
-        ];
-
-        let path_lower = path.to_lowercase();
-        sensitive_patterns.iter().any(|p| path_lower.contains(p))
-    }
 
     /// 바이너리 파일인지 확인
     fn is_binary_file(path: &Path) -> bool {
@@ -172,7 +158,7 @@ impl Tool for ReadTool {
         let path = input.get("file_path")?.as_str()?;
 
         // 민감한 파일인 경우에만 권한 필요
-        if Self::is_sensitive_path(path) {
+        if is_sensitive_path(path) {
             Some(PermissionAction::FileReadSensitive {
                 path: path.to_string(),
             })
@@ -195,6 +181,17 @@ impl Tool for ReadTool {
                 "Path must be absolute, got: {}",
                 parsed.file_path
             )));
+        }
+
+        // 경로 보안 검증 (path traversal, 위험 경로 체크)
+        let validator = PathValidator::new()
+            .with_allowed_root(context.working_dir());
+
+        let validation = validator.validate(path);
+        if !validation.is_valid() {
+            if let Some(msg) = validation.error_message() {
+                return Ok(ToolResult::error(format!("Path security check failed: {}", msg)));
+            }
         }
 
         // 파일 존재 확인
@@ -288,10 +285,11 @@ mod tests {
 
     #[test]
     fn test_sensitive_path_detection() {
-        assert!(ReadTool::is_sensitive_path("/home/user/.ssh/id_rsa"));
-        assert!(ReadTool::is_sensitive_path("/app/.env"));
-        assert!(ReadTool::is_sensitive_path("/secrets/api.key"));
-        assert!(!ReadTool::is_sensitive_path("/home/user/code.rs"));
+        use crate::tool::security::is_sensitive_path;
+        assert!(is_sensitive_path("/home/user/.ssh/id_rsa"));
+        assert!(is_sensitive_path("/app/.env"));
+        assert!(is_sensitive_path("/secrets/api.key"));
+        assert!(!is_sensitive_path("/home/user/code.rs"));
     }
 
     #[test]

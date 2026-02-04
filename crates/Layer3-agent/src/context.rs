@@ -1,9 +1,9 @@
 //! Agent context - shared state for agent execution
 
+use forge_core::ToolRegistry;
 use forge_foundation::permission::PermissionService;
 use forge_foundation::Result;
 use forge_provider::Gateway;
-use forge_tool::ToolRegistry;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -66,8 +66,8 @@ impl AgentContext {
     }
 
     /// Create tool context for execution
-    pub fn tool_context(&self, session_id: &str) -> forge_tool::ToolContext {
-        forge_tool::ToolContext::new(
+    pub fn tool_context(&self, session_id: &str) -> forge_core::RuntimeContext {
+        forge_core::RuntimeContext::new(
             session_id,
             self.working_dir.clone(),
             self.permissions.clone(),

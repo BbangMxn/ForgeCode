@@ -64,7 +64,7 @@ mod client;
 mod manager;
 mod types;
 
-pub use client::{LspClient, LspClientState};
+pub use client::{LspClient, LspClientState, LspRestartConfig};
 pub use manager::LspManager;
 pub use types::*;
 

@@ -127,6 +127,54 @@ pub enum McpTransportConfig {
     },
 }
 
+/// MCP 리소스
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpResource {
+    /// 리소스 URI
+    pub uri: String,
+
+    /// 리소스 이름
+    pub name: String,
+
+    /// 설명
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+
+    /// MIME 타입
+    #[serde(rename = "mimeType", skip_serializing_if = "Option::is_none")]
+    pub mime_type: Option<String>,
+}
+
+/// MCP 프롬프트
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpPrompt {
+    /// 프롬프트 이름
+    pub name: String,
+
+    /// 설명
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+
+    /// 인자 목록
+    #[serde(default)]
+    pub arguments: Vec<McpPromptArgument>,
+}
+
+/// MCP 프롬프트 인자
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpPromptArgument {
+    /// 인자 이름
+    pub name: String,
+
+    /// 설명
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+
+    /// 필수 여부
+    #[serde(default)]
+    pub required: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -139,5 +187,30 @@ mod tests {
 
         let error = McpToolResult::error("Failed");
         assert!(error.is_error);
+    }
+
+    #[test]
+    fn test_mcp_resource() {
+        let resource = McpResource {
+            uri: "file:///test.txt".to_string(),
+            name: "Test File".to_string(),
+            description: Some("A test file".to_string()),
+            mime_type: Some("text/plain".to_string()),
+        };
+        assert_eq!(resource.uri, "file:///test.txt");
+    }
+
+    #[test]
+    fn test_mcp_prompt() {
+        let prompt = McpPrompt {
+            name: "test_prompt".to_string(),
+            description: Some("Test prompt".to_string()),
+            arguments: vec![McpPromptArgument {
+                name: "arg1".to_string(),
+                description: None,
+                required: true,
+            }],
+        };
+        assert_eq!(prompt.arguments.len(), 1);
     }
 }

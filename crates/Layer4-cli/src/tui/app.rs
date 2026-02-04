@@ -1,5 +1,11 @@
 //! Main TUI application
+//!
+//! ForgeCode TUI의 메인 애플리케이션 루프입니다.
+//! - 이벤트 처리 (키보드, 터미널 리사이즈)
+//! - Agent 이벤트 스트림 처리
+//! - 페이지 렌더링
 
+use crate::tui::components::{SettingsAction, SettingsPage};
 use crate::tui::event::{EventHandler, TuiEvent};
 use crate::tui::pages::{ChatAction, ChatPage};
 use crossterm::{
@@ -38,10 +44,18 @@ pub async fn run(config: &ProviderConfig) -> anyhow::Result<()> {
     let mut agent_rx: Option<mpsc::Receiver<forge_agent::AgentEvent>> = None;
 
     // Main loop
-    loop {
+    let result = loop {
         // Draw UI
         terminal.draw(|frame| {
-            app.chat.render(frame, frame.area());
+            let area = frame.area();
+
+            // Render chat page
+            app.chat.render(frame, area);
+
+            // Render settings overlay if visible
+            if app.settings.is_visible() {
+                app.settings.render(frame, area);
+            }
         })?;
 
         // Handle events
@@ -49,12 +63,45 @@ pub async fn run(config: &ProviderConfig) -> anyhow::Result<()> {
             // TUI events
             Some(event) = event_handler.next() => {
                 match event {
-                    TuiEvent::Quit => break,
+                    TuiEvent::Quit => break Ok(()),
                     TuiEvent::Key(key) => {
+                        // Handle settings page first if visible
+                        if app.settings.is_visible() {
+                            match app.settings.handle_key(key.code) {
+                                SettingsAction::Closed => {}
+                                SettingsAction::Saved => {
+                                    // TODO: Apply settings
+                                }
+                                SettingsAction::Error(e) => {
+                                    tracing::error!("Settings error: {}", e);
+                                }
+                                SettingsAction::None => {}
+                            }
+                            continue;
+                        }
+
+                        // Check for settings shortcut (Ctrl+S)
+                        if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL)
+                            && key.code == crossterm::event::KeyCode::Char('s')
+                        {
+                            app.settings.show();
+                            continue;
+                        }
+
+                        // Handle chat page
                         if let Some(action) = app.chat.handle_key(key) {
                             match action {
                                 ChatAction::SendMessage(content) => {
                                     agent_rx = Some(app.chat.send_message(content).await);
+                                }
+                                ChatAction::SlashCommand(cmd) => {
+                                    app.chat.handle_slash_command(&cmd);
+                                }
+                                ChatAction::TogglePause => {
+                                    app.chat.toggle_pause().await;
+                                }
+                                ChatAction::StopAgent => {
+                                    app.chat.stop_agent().await;
                                 }
                             }
                         }
@@ -79,7 +126,7 @@ pub async fn run(config: &ProviderConfig) -> anyhow::Result<()> {
                 app.chat.handle_agent_event(event);
             }
         }
-    }
+    };
 
     // Restore terminal
     disable_raw_mode()?;
@@ -90,18 +137,22 @@ pub async fn run(config: &ProviderConfig) -> anyhow::Result<()> {
     )?;
     terminal.show_cursor()?;
 
-    Ok(())
+    result
 }
 
 /// Main application state
 struct App {
+    /// Chat page
     chat: ChatPage,
+    /// Settings page
+    settings: SettingsPage,
 }
 
 impl App {
     fn new() -> Self {
         Self {
             chat: ChatPage::new(),
+            settings: SettingsPage::new(),
         }
     }
 }

@@ -193,6 +193,54 @@ pub struct ProviderMetadata {
     pub base_url: Option<String>,
 }
 
+/// Token counting result
+#[derive(Debug, Clone, Default)]
+pub struct TokenCount {
+    /// Total token count
+    pub total: u32,
+
+    /// Tokens from messages
+    pub messages: u32,
+
+    /// Tokens from system prompt
+    pub system: u32,
+
+    /// Tokens from tool definitions
+    pub tools: u32,
+
+    /// Whether this is an estimate (not exact count)
+    pub is_estimate: bool,
+}
+
+impl TokenCount {
+    /// Create a new token count
+    pub fn new(total: u32) -> Self {
+        Self {
+            total,
+            messages: total,
+            system: 0,
+            tools: 0,
+            is_estimate: false,
+        }
+    }
+
+    /// Create an estimated token count
+    pub fn estimate(total: u32) -> Self {
+        Self {
+            total,
+            messages: total,
+            system: 0,
+            tools: 0,
+            is_estimate: true,
+        }
+    }
+
+    /// Check if request fits within context window
+    pub fn fits_context(&self, context_window: u32, reserve_output: u32) -> bool {
+        self.total + reserve_output <= context_window
+    }
+}
+
 /// LLM Provider trait
 ///
 /// Implement this trait to add support for a new LLM provider.
@@ -229,6 +277,81 @@ pub trait Provider: Send + Sync {
     /// List available models
     fn list_models(&self) -> &[ModelInfo] {
         &self.metadata().models
+    }
+
+    /// Count tokens for the given input
+    ///
+    /// This is used to check if a request will fit within the context window
+    /// before sending it to the provider. The default implementation uses
+    /// a character-based estimate (4 chars per token).
+    ///
+    /// Providers with native tokenizers should override this method for
+    /// accurate counting.
+    fn count_tokens(
+        &self,
+        messages: &[Message],
+        tools: &[ToolDef],
+        system_prompt: Option<&str>,
+    ) -> TokenCount {
+        // Default implementation: estimate based on character count
+        // Rough approximation: ~4 characters per token for English text
+        let mut total_chars = 0usize;
+        let mut message_chars = 0usize;
+        let mut tool_chars = 0usize;
+        let mut system_chars = 0usize;
+
+        // Count message content
+        for msg in messages {
+            message_chars += msg.content.len();
+            // Tool results tend to be more token-dense
+            if let Some(ref result) = msg.tool_result {
+                message_chars += result.content.len();
+            }
+        }
+
+        // Count tool definitions (JSON tends to be more token-dense)
+        for tool in tools {
+            tool_chars += tool.name.len();
+            tool_chars += tool.description.len();
+            // JSON schema is typically ~3 chars per token
+            if let Ok(params_json) = serde_json::to_string(&tool.parameters) {
+                tool_chars += params_json.len();
+            }
+        }
+
+        // Count system prompt
+        if let Some(system) = system_prompt {
+            system_chars = system.len();
+        }
+
+        total_chars = message_chars + tool_chars + system_chars;
+
+        // Convert to tokens (rough estimate)
+        let chars_per_token = 4;
+        TokenCount {
+            total: (total_chars / chars_per_token) as u32,
+            messages: (message_chars / chars_per_token) as u32,
+            system: (system_chars / chars_per_token) as u32,
+            tools: (tool_chars / chars_per_token) as u32,
+            is_estimate: true,
+        }
+    }
+
+    /// Check if the input fits within the model's context window
+    ///
+    /// Returns the token count and whether it fits, reserving space for output.
+    fn check_context_fit(
+        &self,
+        messages: &[Message],
+        tools: &[ToolDef],
+        system_prompt: Option<&str>,
+        reserve_output_tokens: Option<u32>,
+    ) -> (TokenCount, bool) {
+        let count = self.count_tokens(messages, tools, system_prompt);
+        let model = self.model();
+        let reserve = reserve_output_tokens.unwrap_or(model.max_output_tokens);
+        let fits = count.fits_context(model.context_window, reserve);
+        (count, fits)
     }
 }
 

@@ -49,15 +49,25 @@
 pub mod builtin;
 mod context;
 mod registry;
+pub mod security;
+
+// Re-exports: Tool trait from Layer1
+pub use forge_foundation::{Tool, ToolContext};
 
 // Re-exports: Tools
 pub use builtin::{
-    all_tools, core_tools, filesystem_tools,
-    BashTool, EditTool, GlobTool, GrepTool, ReadTool, WriteTool,
+    all_tools, core_tools, filesystem_tools, BashTool, EditTool, GlobTool, GrepTool, ReadTool,
+    WriteTool,
 };
 
 // Re-exports: Context
 pub use context::{DefaultShellConfig, RuntimeContext};
 
 // Re-exports: Registry
-pub use registry::ToolRegistry;
+pub use registry::{
+    ParallelExecutionConfig, ParallelExecutionStats, ParallelToolCall, ToolDefinition,
+    ToolExecuteResult, ToolParameters, ToolRegistry,
+};
+
+// Re-exports: Security
+pub use security::{is_safe_extension, is_sensitive_path, PathValidation, PathValidator};

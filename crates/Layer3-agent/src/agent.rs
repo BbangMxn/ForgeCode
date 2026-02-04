@@ -1,13 +1,49 @@
-//! Core agent implementation
+//! Core Agent Implementation
+//!
+//! Claude Code / OpenCode / Gemini CLI 스타일의 단순하고 효율적인 Agent Loop입니다.
+//!
+//! ## 핵심 원칙
+//! - Single-threaded flat loop (복잡한 4단계 loop 대신)
+//! - Hook system으로 확장성 확보
+//! - 자동 컨텍스트 압축 (92% threshold)
+//! - 실시간 steering (중단/재개/방향전환)
+//!
+//! ## 실행 흐름
+//! ```text
+//! User Input → hooks.before_agent()
+//!     → Main Loop:
+//!         1. Check context (>92%? → compress)
+//!         2. Check steering (paused? stopped?)
+//!         3. provider.stream(history, tools)
+//!         4. Process stream events
+//!         5. No tool calls? → break
+//!         6. For each tool:
+//!            - hooks.before_tool()
+//!            - execute()
+//!            - hooks.after_tool()
+//!         7. Continue loop
+//!     → hooks.after_agent()
+//! → Return Response
+//! ```
 
+use crate::compressor::{CompressionResult, CompressorConfig, ContextCompressor};
 use crate::context::AgentContext;
 use crate::history::MessageHistory;
+use crate::hook::{AgentHook, HookManager, HookResult, ToolResult, TurnInfo};
+use crate::recovery::{ErrorRecovery, RecoveryAction, RecoveryContext};
+use crate::steering::{AgentState, Steerable, SteeringChecker, SteeringHandle, SteeringQueue};
 use forge_foundation::{Error, Result};
 use forge_provider::{StreamEvent, ToolCall};
 use futures::StreamExt;
+use serde_json::Value;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
+
+// ============================================================================
+// Agent Events
+// ============================================================================
 
 /// Events emitted by the agent during execution
 #[derive(Debug, Clone)]
@@ -30,6 +66,7 @@ pub enum AgentEvent {
         tool_call_id: String,
         result: String,
         success: bool,
+        duration_ms: u64,
     },
 
     /// Response completed
@@ -43,30 +80,177 @@ pub enum AgentEvent {
         input_tokens: u32,
         output_tokens: u32,
     },
+
+    /// Context compressed
+    Compressed {
+        tokens_before: usize,
+        tokens_after: usize,
+        tokens_saved: usize,
+    },
+
+    /// Turn started
+    TurnStart { turn: u32 },
+
+    /// Turn completed
+    TurnComplete { turn: u32 },
+
+    /// Agent paused
+    Paused,
+
+    /// Agent resumed
+    Resumed,
+
+    /// Agent stopped
+    Stopped { reason: String },
 }
 
+// ============================================================================
+// Agent Configuration
+// ============================================================================
+
+/// Agent 설정
+#[derive(Debug, Clone)]
+pub struct AgentConfig {
+    /// 최대 반복 횟수
+    pub max_iterations: usize,
+
+    /// 컨텍스트 압축 설정
+    pub compressor_config: CompressorConfig,
+
+    /// 자동 압축 활성화
+    pub auto_compress: bool,
+
+    /// 스트리밍 활성화
+    pub streaming: bool,
+}
+
+impl Default for AgentConfig {
+    fn default() -> Self {
+        Self {
+            max_iterations: 50,
+            compressor_config: CompressorConfig::claude_code_style(),
+            auto_compress: true,
+            streaming: true,
+        }
+    }
+}
+
+impl AgentConfig {
+    /// 빠른 실행용 설정
+    pub fn fast() -> Self {
+        Self {
+            max_iterations: 20,
+            compressor_config: CompressorConfig::aggressive(),
+            auto_compress: true,
+            streaming: true,
+        }
+    }
+
+    /// 긴 세션용 설정
+    pub fn long_session() -> Self {
+        Self {
+            max_iterations: 100,
+            compressor_config: CompressorConfig::conservative(),
+            auto_compress: true,
+            streaming: true,
+        }
+    }
+}
+
+// ============================================================================
+// Agent
+// ============================================================================
+
 /// The core agent that handles conversation with LLM
+///
+/// Claude Code 스타일의 단순한 single-threaded loop를 사용합니다.
 pub struct Agent {
     /// Shared context
     ctx: Arc<AgentContext>,
 
-    /// Maximum iterations for tool use loop
-    max_iterations: usize,
+    /// Agent configuration
+    config: AgentConfig,
+
+    /// Error recovery system
+    error_recovery: ErrorRecovery,
+
+    /// Hook manager
+    hooks: HookManager,
+
+    /// Context compressor
+    compressor: ContextCompressor,
+
+    /// Steering queue
+    steering_queue: SteeringQueue,
+
+    /// Steering checker (stored for Steerable trait)
+    steering_checker: SteeringChecker,
 }
 
 impl Agent {
     /// Create a new agent
     pub fn new(ctx: Arc<AgentContext>) -> Self {
+        let config = AgentConfig::default();
+        let steering_queue = SteeringQueue::new();
+        let steering_checker = steering_queue.checker();
         Self {
             ctx,
-            max_iterations: 20,
+            compressor: ContextCompressor::new(config.compressor_config.clone()),
+            config,
+            error_recovery: ErrorRecovery::new(),
+            hooks: HookManager::new(),
+            steering_queue,
+            steering_checker,
+        }
+    }
+
+    /// Create with custom configuration
+    pub fn with_config(ctx: Arc<AgentContext>, config: AgentConfig) -> Self {
+        let steering_queue = SteeringQueue::new();
+        let steering_checker = steering_queue.checker();
+        Self {
+            ctx,
+            compressor: ContextCompressor::new(config.compressor_config.clone()),
+            config,
+            error_recovery: ErrorRecovery::new(),
+            hooks: HookManager::new(),
+            steering_queue,
+            steering_checker,
         }
     }
 
     /// Set maximum iterations for tool use loop
     pub fn with_max_iterations(mut self, max: usize) -> Self {
-        self.max_iterations = max;
+        self.config.max_iterations = max;
         self
+    }
+
+    /// Set custom error recovery
+    pub fn with_error_recovery(mut self, recovery: ErrorRecovery) -> Self {
+        self.error_recovery = recovery;
+        self
+    }
+
+    /// Add a hook
+    pub fn with_hook<H: AgentHook + 'static>(mut self, hook: H) -> Self {
+        self.hooks.add(hook);
+        self
+    }
+
+    /// Add a hook (Arc version)
+    pub fn with_hook_arc(mut self, hook: Arc<dyn AgentHook>) -> Self {
+        self.hooks.add_arc(hook);
+        self
+    }
+
+    /// Get steering handle for external control
+    pub fn steering_handle(&self) -> SteeringHandle {
+        self.steering_queue.handle()
+    }
+
+    /// Get steering checker for internal use
+    fn steering_checker(&self) -> &SteeringChecker {
+        &self.steering_checker
     }
 
     /// Run the agent with a user message
@@ -77,6 +261,9 @@ impl Agent {
         user_message: &str,
         event_tx: mpsc::Sender<AgentEvent>,
     ) -> Result<String> {
+        let steering = self.steering_checker();
+        steering.set_state(AgentState::Running).await;
+
         // Add user message to history
         history.add_user(user_message);
 
@@ -85,17 +272,114 @@ impl Agent {
             history.set_system_prompt(&self.ctx.system_prompt);
         }
 
+        // Run before_agent hooks
+        match self.hooks.run_before_agent(history).await? {
+            HookResult::Stop { reason } => {
+                let _ = event_tx
+                    .send(AgentEvent::Stopped {
+                        reason: reason.clone(),
+                    })
+                    .await;
+                return Err(Error::Agent(format!("Stopped by hook: {}", reason)));
+            }
+            HookResult::Block { response } => {
+                let _ = event_tx
+                    .send(AgentEvent::Done {
+                        full_response: response.clone(),
+                    })
+                    .await;
+                return Ok(response);
+            }
+            _ => {}
+        }
+
         let mut full_response = String::new();
-        let mut iterations = 0;
+        let mut turn = 0u32;
+        let mut total_input_tokens = 0u32;
+        let mut total_output_tokens = 0u32;
+        let mut tools_used = Vec::new();
 
         loop {
-            if iterations >= self.max_iterations {
-                warn!("Max iterations reached");
+            // Check max iterations
+            if turn as usize >= self.config.max_iterations {
+                warn!("Max iterations reached: {}", self.config.max_iterations);
                 break;
             }
-            iterations += 1;
+            turn += 1;
+            steering.set_turn(turn);
 
+            // Process steering commands
+            steering.process_commands().await;
+
+            // Check if stopped
+            if steering.should_stop() {
+                let reason = steering
+                    .stop_reason()
+                    .await
+                    .unwrap_or_else(|| "Unknown".to_string());
+                let _ = event_tx
+                    .send(AgentEvent::Stopped {
+                        reason: reason.clone(),
+                    })
+                    .await;
+                return Err(Error::Agent(format!("Agent stopped: {}", reason)));
+            }
+
+            // Wait if paused
+            if steering.is_paused() {
+                let _ = event_tx.send(AgentEvent::Paused).await;
+                steering.wait_if_paused().await;
+                let _ = event_tx.send(AgentEvent::Resumed).await;
+            }
+
+            // Check and apply context compression if needed
+            if self.config.auto_compress && self.compressor.needs_compression(history) {
+                self.hooks.run_before_compress(history).await?;
+
+                let result = self.compressor.compress(history)?;
+                if result.compressed {
+                    let _ = event_tx
+                        .send(AgentEvent::Compressed {
+                            tokens_before: result.tokens_before,
+                            tokens_after: result.tokens_after,
+                            tokens_saved: result.tokens_saved,
+                        })
+                        .await;
+                    info!(
+                        "Context compressed: {} -> {} tokens (saved {})",
+                        result.tokens_before, result.tokens_after, result.tokens_saved
+                    );
+
+                    self.hooks
+                        .run_after_compress(history, result.tokens_saved)
+                        .await?;
+                }
+            }
+
+            // Process injected instructions (from steering)
+            let injected = steering.take_injected_instructions().await;
+            for instruction in injected {
+                history.add_user(format!("[System instruction]: {}", instruction));
+            }
+
+            // Process injected context
+            let injected_ctx = steering.take_injected_context().await;
+            for ctx in injected_ctx {
+                history.add_user(format!("[Additional context]: {}", ctx));
+            }
+
+            // Run before_turn hook
+            match self.hooks.run_before_turn(history, turn).await? {
+                HookResult::Stop { reason } => {
+                    let _ = event_tx.send(AgentEvent::Stopped { reason }).await;
+                    break;
+                }
+                _ => {}
+            }
+
+            let _ = event_tx.send(AgentEvent::TurnStart { turn }).await;
             let _ = event_tx.send(AgentEvent::Thinking).await;
+            steering.set_state(AgentState::WaitingForLlm).await;
 
             // Get tool definitions
             let tools = self.ctx.tool_definitions();
@@ -116,8 +400,10 @@ impl Agent {
                 full_response.push_str(&response_text);
             }
 
-            // Send usage update
+            // Update token usage
             if let Some((input, output)) = usage {
+                total_input_tokens += input;
+                total_output_tokens += output;
                 let _ = event_tx
                     .send(AgentEvent::Usage {
                         input_tokens: input,
@@ -128,31 +414,99 @@ impl Agent {
 
             // If no tool calls, we're done
             if tool_calls.is_empty() {
-                // Add assistant response to history
                 if !full_response.is_empty() {
                     history.add_assistant(&full_response);
                 }
+
+                // Run after_turn hook
+                self.hooks
+                    .run_after_turn(history, turn, &full_response)
+                    .await?;
+                let _ = event_tx.send(AgentEvent::TurnComplete { turn }).await;
                 break;
             }
 
             // Add assistant message with tool calls
             history.add_assistant_with_tools(&response_text, tool_calls.clone());
+            steering.set_state(AgentState::ExecutingTool).await;
 
-            // Execute tool calls
+            // Execute tool calls sequentially (like Claude Code / Gemini CLI)
             for tool_call in tool_calls {
-                let result = self.execute_tool(session_id, &tool_call, &event_tx).await;
+                // Check steering before each tool
+                steering.process_commands().await;
+                if steering.should_stop() {
+                    break;
+                }
 
-                // Add tool result to history
-                let (content, is_error) = match result {
-                    Ok(content) => (content, false),
+                // Run before_tool hook
+                match self.hooks.run_before_tool(&tool_call, history).await? {
+                    HookResult::Stop { reason } => {
+                        let _ = event_tx.send(AgentEvent::Stopped { reason }).await;
+                        return Err(Error::Agent("Stopped by hook".to_string()));
+                    }
+                    HookResult::Block { response } => {
+                        // Skip this tool, use synthetic response
+                        history.add_tool_result(&tool_call.id, &response, false);
+                        continue;
+                    }
+                    _ => {}
+                }
+
+                let tool_start = Instant::now();
+                let result = self.execute_tool(session_id, &tool_call, &event_tx).await;
+                let duration_ms = tool_start.elapsed().as_millis() as u64;
+
+                // Create ToolResult for hook
+                let (content, is_error) = match &result {
+                    Ok(content) => (content.clone(), false),
                     Err(e) => (e.to_string(), true),
                 };
 
+                let tool_result = ToolResult {
+                    tool_call_id: tool_call.id.clone(),
+                    tool_name: tool_call.name.clone(),
+                    output: content.clone(),
+                    success: !is_error,
+                    duration_ms,
+                };
+
+                // Run after_tool hook
+                self.hooks
+                    .run_after_tool(&tool_call, &tool_result, history)
+                    .await?;
+
+                // Track tools used
+                if !tools_used.contains(&tool_call.name) {
+                    tools_used.push(tool_call.name.clone());
+                }
+
+                // Add tool result to history
                 history.add_tool_result(&tool_call.id, &content, is_error);
             }
 
+            // Run after_turn hook
+            self.hooks
+                .run_after_turn(history, turn, &response_text)
+                .await?;
+            let _ = event_tx.send(AgentEvent::TurnComplete { turn }).await;
+
             // Continue loop to get next LLM response
         }
+
+        // Create turn info for after_agent hook
+        let turn_info = TurnInfo {
+            turn,
+            input_tokens: total_input_tokens,
+            output_tokens: total_output_tokens,
+            tools_used,
+        };
+
+        // Run after_agent hooks
+        self.hooks
+            .run_after_agent(history, &full_response, &turn_info)
+            .await?;
+
+        steering.set_state(AgentState::Completed).await;
 
         // Send done event
         let _ = event_tx
@@ -180,7 +534,9 @@ impl Agent {
             match event {
                 StreamEvent::Text(text) => {
                     response_text.push_str(&text);
-                    let _ = event_tx.send(AgentEvent::Text(text)).await;
+                    if self.config.streaming {
+                        let _ = event_tx.send(AgentEvent::Text(text)).await;
+                    }
                 }
                 StreamEvent::ToolCall(tc) => {
                     tool_calls.push(tc);
@@ -225,38 +581,188 @@ impl Agent {
             })
             .await;
 
+        let start = Instant::now();
+
         // Create tool context
         let tool_ctx = self.ctx.tool_context(session_id);
 
-        // Execute tool
+        // Execute tool with recovery
         let result = self
+            .execute_tool_with_recovery(
+                session_id,
+                &tool_call.name,
+                &tool_call.id,
+                tool_call.arguments.clone(),
+                &tool_ctx,
+                event_tx,
+            )
+            .await;
+
+        let duration_ms = start.elapsed().as_millis() as u64;
+
+        // Send completion event
+        match &result {
+            Ok(content) => {
+                let _ = event_tx
+                    .send(AgentEvent::ToolComplete {
+                        tool_name: tool_call.name.clone(),
+                        tool_call_id: tool_call.id.clone(),
+                        result: content.clone(),
+                        success: true,
+                        duration_ms,
+                    })
+                    .await;
+            }
+            Err(e) => {
+                let _ = event_tx
+                    .send(AgentEvent::ToolComplete {
+                        tool_name: tool_call.name.clone(),
+                        tool_call_id: tool_call.id.clone(),
+                        result: e.to_string(),
+                        success: false,
+                        duration_ms,
+                    })
+                    .await;
+            }
+        }
+
+        result
+    }
+
+    /// Execute a tool with automatic error recovery
+    async fn execute_tool_with_recovery(
+        &self,
+        _session_id: &str,
+        tool_name: &str,
+        tool_call_id: &str,
+        arguments: Value,
+        tool_ctx: &dyn forge_core::ToolContext,
+        event_tx: &mpsc::Sender<AgentEvent>,
+    ) -> Result<String> {
+        // Get available tools for recovery context
+        let available_tools: Vec<String> = self
             .ctx
             .tools
-            .execute(&tool_call.name, &tool_ctx, tool_call.arguments.clone())
-            .await;
+            .list()
+            .iter()
+            .map(|(name, _)| name.to_string())
+            .collect();
 
-        let (content, success) = if result.success {
-            (result.content.clone(), true)
-        } else {
-            (
-                result.error.unwrap_or_else(|| "Unknown error".to_string()),
-                false,
-            )
-        };
+        let mut recovery_ctx =
+            RecoveryContext::new(&tool_ctx.working_dir().to_string_lossy(), available_tools);
 
-        let _ = event_tx
-            .send(AgentEvent::ToolComplete {
-                tool_name: tool_call.name.clone(),
-                tool_call_id: tool_call.id.clone(),
-                result: content.clone(),
-                success,
-            })
-            .await;
+        let mut current_tool = tool_name.to_string();
+        let mut current_args = arguments;
 
-        if success {
-            Ok(content)
-        } else {
-            Err(Error::Tool(content))
+        loop {
+            // Execute tool
+            let result = self
+                .ctx
+                .tools
+                .execute(&current_tool, tool_ctx, current_args.clone())
+                .await;
+
+            if result.success {
+                return Ok(result.content);
+            }
+
+            // Tool failed - attempt recovery
+            let error_msg = result.error.unwrap_or_else(|| "Unknown error".to_string());
+            info!(
+                "Tool '{}' failed: {}. Attempting recovery...",
+                current_tool, error_msg
+            );
+
+            let action = self
+                .error_recovery
+                .handle_error(&current_tool, &current_args, &error_msg, &mut recovery_ctx)
+                .await;
+
+            match action {
+                RecoveryAction::Retry {
+                    modified_input,
+                    reason,
+                } => {
+                    info!("Recovery: Retrying with modified input - {}", reason);
+                    current_args = modified_input;
+                }
+
+                RecoveryAction::UseFallback {
+                    tool,
+                    input,
+                    reason,
+                } => {
+                    info!("Recovery: Using fallback tool '{}' - {}", tool, reason);
+                    current_tool = tool;
+                    current_args = input;
+                }
+
+                RecoveryAction::WaitAndRetry { delay_ms, reason } => {
+                    info!("Recovery: Waiting {}ms - {}", delay_ms, reason);
+                    tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+                }
+
+                RecoveryAction::AskUser { question, context } => {
+                    let error_with_question = format!(
+                        "Tool failed: {}\n\nRecovery question: {}\nContext: {}",
+                        error_msg, question, context
+                    );
+                    return Err(Error::Tool(error_with_question));
+                }
+
+                RecoveryAction::GiveUp {
+                    reason,
+                    suggestions,
+                } => {
+                    let error_with_help = format!(
+                        "Tool failed: {}\nReason: {}\nSuggestions:\n{}",
+                        error_msg,
+                        reason,
+                        suggestions
+                            .iter()
+                            .map(|s| format!("  - {}", s))
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    );
+                    return Err(Error::Tool(error_with_help));
+                }
+            }
         }
+    }
+}
+
+// Implement Steerable for Agent
+impl Steerable for Agent {
+    fn steering(&self) -> &SteeringChecker {
+        &self.steering_checker
+    }
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_agent_config_default() {
+        let config = AgentConfig::default();
+        assert_eq!(config.max_iterations, 50);
+        assert!(config.auto_compress);
+        assert!(config.streaming);
+    }
+
+    #[test]
+    fn test_agent_config_fast() {
+        let config = AgentConfig::fast();
+        assert_eq!(config.max_iterations, 20);
+    }
+
+    #[test]
+    fn test_agent_config_long_session() {
+        let config = AgentConfig::long_session();
+        assert_eq!(config.max_iterations, 100);
     }
 }

@@ -7,12 +7,22 @@
 //! - Tool Executions: 도구 실행 로그
 //!
 //! 설정 데이터는 JSON (storage/json/)에서 관리
+//!
+//! ## Migration System
+//!
+//! Database schema is versioned. Migrations run automatically on startup.
+//! - Version 1: Initial schema (sessions, messages, token_usage, tool_executions)
+//! - Version 2: Add context_tokens and thinking_tokens columns
 
 use crate::{Error, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use tracing::{debug, info, warn};
+
+/// Current schema version
+const CURRENT_SCHEMA_VERSION: i32 = 2;
 
 /// Storage service for persisting runtime data
 pub struct Storage {
@@ -38,6 +48,7 @@ impl Storage {
         };
 
         storage.initialize_schema()?;
+        storage.run_migrations()?;
 
         Ok(storage)
     }
@@ -52,11 +63,27 @@ impl Storage {
         };
 
         storage.initialize_schema()?;
+        storage.run_migrations()?;
 
         Ok(storage)
     }
 
-    /// Initialize database schema
+    /// Get current schema version from database
+    pub fn get_schema_version(&self) -> Result<i32> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| Error::Internal("Lock poisoned".to_string()))?;
+
+        conn.query_row(
+            "SELECT COALESCE(MAX(version), 0) FROM schema_version",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| Error::Storage(format!("Failed to get schema version: {}", e)))
+    }
+
+    /// Initialize database schema (base tables)
     fn initialize_schema(&self) -> Result<()> {
         let conn = self
             .conn
@@ -67,7 +94,8 @@ impl Storage {
             r#"
             -- Schema version tracking
             CREATE TABLE IF NOT EXISTS schema_version (
-                version INTEGER PRIMARY KEY
+                version INTEGER PRIMARY KEY,
+                applied_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
 
             -- Sessions table
@@ -146,11 +174,75 @@ impl Storage {
             CREATE INDEX IF NOT EXISTS idx_tool_executions_session
                 ON tool_executions(session_id, created_at);
 
-            -- Insert initial schema version
+            -- Insert initial schema version if not exists
             INSERT OR IGNORE INTO schema_version (version) VALUES (1);
             "#,
         )
         .map_err(|e| Error::Storage(format!("Failed to initialize schema: {}", e)))?;
+
+        Ok(())
+    }
+
+    /// Run all pending migrations
+    fn run_migrations(&self) -> Result<()> {
+        let current_version = self.get_schema_version()?;
+
+        if current_version >= CURRENT_SCHEMA_VERSION {
+            debug!(
+                "Database schema is up to date (version {})",
+                current_version
+            );
+            return Ok(());
+        }
+
+        info!(
+            "Running database migrations from version {} to {}",
+            current_version, CURRENT_SCHEMA_VERSION
+        );
+
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| Error::Internal("Lock poisoned".to_string()))?;
+
+        // Run migrations sequentially
+        for version in (current_version + 1)..=CURRENT_SCHEMA_VERSION {
+            match version {
+                2 => self.migrate_v2(&conn)?,
+                _ => {
+                    warn!("Unknown migration version: {}", version);
+                }
+            }
+
+            // Record migration
+            conn.execute(
+                "INSERT OR REPLACE INTO schema_version (version) VALUES (?1)",
+                params![version],
+            )
+            .map_err(|e| Error::Storage(format!("Failed to record migration: {}", e)))?;
+
+            info!("Applied migration to version {}", version);
+        }
+
+        Ok(())
+    }
+
+    /// Migration to version 2: Add context and thinking token tracking
+    fn migrate_v2(&self, conn: &Connection) -> Result<()> {
+        // Add context_tokens to sessions for tracking context window usage
+        let _ = conn.execute(
+            "ALTER TABLE sessions ADD COLUMN context_tokens INTEGER DEFAULT 0",
+            [],
+        );
+
+        // Add thinking_tokens to token_usage for extended thinking tracking
+        let _ = conn.execute(
+            "ALTER TABLE token_usage ADD COLUMN thinking_tokens INTEGER DEFAULT 0",
+            [],
+        );
+
+        // Add metadata JSON column to messages for extensibility
+        let _ = conn.execute("ALTER TABLE messages ADD COLUMN metadata TEXT", []);
 
         Ok(())
     }
@@ -202,7 +294,8 @@ impl Storage {
                 total_output_tokens = ?4,
                 total_cost_cents = ?5,
                 message_count = ?6,
-                updated_at = ?7
+                context_tokens = ?7,
+                updated_at = ?8
             WHERE id = ?1
             "#,
             params![
@@ -212,6 +305,7 @@ impl Storage {
                 session.total_output_tokens,
                 session.total_cost_cents,
                 session.message_count,
+                session.context_tokens,
                 now,
             ],
         )
@@ -231,7 +325,7 @@ impl Storage {
             r#"
             SELECT id, title, working_directory, provider, model,
                    total_input_tokens, total_output_tokens, total_cost_cents,
-                   message_count, created_at, updated_at
+                   message_count, COALESCE(context_tokens, 0), created_at, updated_at
             FROM sessions WHERE id = ?1
             "#,
             params![id],
@@ -246,8 +340,9 @@ impl Storage {
                     total_output_tokens: row.get(6)?,
                     total_cost_cents: row.get(7)?,
                     message_count: row.get(8)?,
-                    created_at: row.get(9)?,
-                    updated_at: row.get(10)?,
+                    context_tokens: row.get(9)?,
+                    created_at: row.get(10)?,
+                    updated_at: row.get(11)?,
                 })
             },
         )
@@ -267,7 +362,7 @@ impl Storage {
                 r#"
                 SELECT id, title, working_directory, provider, model,
                        total_input_tokens, total_output_tokens, total_cost_cents,
-                       message_count, created_at, updated_at
+                       message_count, COALESCE(context_tokens, 0), created_at, updated_at
                 FROM sessions ORDER BY updated_at DESC LIMIT {}
                 "#,
                 n
@@ -275,7 +370,7 @@ impl Storage {
             None => r#"
                 SELECT id, title, working_directory, provider, model,
                        total_input_tokens, total_output_tokens, total_cost_cents,
-                       message_count, created_at, updated_at
+                       message_count, COALESCE(context_tokens, 0), created_at, updated_at
                 FROM sessions ORDER BY updated_at DESC
             "#
             .to_string(),
@@ -297,8 +392,9 @@ impl Storage {
                     total_output_tokens: row.get(6)?,
                     total_cost_cents: row.get(7)?,
                     message_count: row.get(8)?,
-                    created_at: row.get(9)?,
-                    updated_at: row.get(10)?,
+                    context_tokens: row.get(9)?,
+                    created_at: row.get(10)?,
+                    updated_at: row.get(11)?,
                 })
             })
             .map_err(|e| Error::Storage(format!("Failed to query sessions: {}", e)))?
@@ -335,8 +431,8 @@ impl Storage {
         conn.execute(
             r#"
             INSERT INTO messages (id, session_id, role, content, tool_calls, tool_results,
-                                  input_tokens, output_tokens, finish_reason, created_at)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                                  input_tokens, output_tokens, finish_reason, metadata, created_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
             "#,
             params![
                 message.id,
@@ -348,6 +444,7 @@ impl Storage {
                 message.input_tokens,
                 message.output_tokens,
                 message.finish_reason,
+                message.metadata,
                 message.created_at,
             ],
         )
@@ -387,7 +484,7 @@ impl Storage {
             .prepare(
                 r#"
                 SELECT id, session_id, role, content, tool_calls, tool_results,
-                       input_tokens, output_tokens, finish_reason, created_at
+                       input_tokens, output_tokens, finish_reason, metadata, created_at
                 FROM messages
                 WHERE session_id = ?1
                 ORDER BY created_at ASC
@@ -407,7 +504,8 @@ impl Storage {
                     input_tokens: row.get(6)?,
                     output_tokens: row.get(7)?,
                     finish_reason: row.get(8)?,
-                    created_at: row.get(9)?,
+                    metadata: row.get(9)?,
+                    created_at: row.get(10)?,
                 })
             })
             .map_err(|e| Error::Storage(format!("Failed to query messages: {}", e)))?
@@ -428,7 +526,7 @@ impl Storage {
             .prepare(
                 r#"
                 SELECT id, session_id, role, content, tool_calls, tool_results,
-                       input_tokens, output_tokens, finish_reason, created_at
+                       input_tokens, output_tokens, finish_reason, metadata, created_at
                 FROM messages
                 WHERE session_id = ?1
                 ORDER BY created_at DESC
@@ -449,7 +547,8 @@ impl Storage {
                     input_tokens: row.get(6)?,
                     output_tokens: row.get(7)?,
                     finish_reason: row.get(8)?,
-                    created_at: row.get(9)?,
+                    metadata: row.get(9)?,
+                    created_at: row.get(10)?,
                 })
             })
             .map_err(|e| Error::Storage(format!("Failed to query messages: {}", e)))?
@@ -475,8 +574,8 @@ impl Storage {
         conn.execute(
             r#"
             INSERT INTO token_usage (session_id, provider, model, input_tokens, output_tokens,
-                                     cache_read_tokens, cache_write_tokens, cost_cents, recorded_at)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                                     cache_read_tokens, cache_write_tokens, thinking_tokens, cost_cents, recorded_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
             "#,
             params![
                 usage.session_id,
@@ -486,6 +585,7 @@ impl Storage {
                 usage.output_tokens,
                 usage.cache_read_tokens,
                 usage.cache_write_tokens,
+                usage.thinking_tokens,
                 usage.cost_cents,
                 now,
             ],
@@ -608,6 +708,216 @@ impl Storage {
 
         Ok(())
     }
+
+    /// Get tool executions for a session
+    pub fn get_tool_executions(&self, session_id: &str) -> Result<Vec<ToolExecutionRecord>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| Error::Internal("Lock poisoned".to_string()))?;
+
+        let mut stmt = conn
+            .prepare(
+                r#"
+                SELECT id, session_id, message_id, tool_name, tool_call_id, input_json,
+                       output_text, status, error_message, duration_ms, created_at, completed_at
+                FROM tool_executions
+                WHERE session_id = ?1
+                ORDER BY created_at DESC
+                "#,
+            )
+            .map_err(|e| Error::Storage(format!("Failed to prepare query: {}", e)))?;
+
+        let executions = stmt
+            .query_map(params![session_id], |row| {
+                Ok(ToolExecutionRecord {
+                    id: row.get(0)?,
+                    session_id: row.get(1)?,
+                    message_id: row.get(2)?,
+                    tool_name: row.get(3)?,
+                    tool_call_id: row.get(4)?,
+                    input_json: row.get(5)?,
+                    output_text: row.get(6)?,
+                    status: row.get(7)?,
+                    error_message: row.get(8)?,
+                    duration_ms: row.get(9)?,
+                    created_at: row.get(10)?,
+                    completed_at: row.get(11)?,
+                })
+            })
+            .map_err(|e| Error::Storage(format!("Failed to query tool executions: {}", e)))?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(executions)
+    }
+
+    /// Get recent tool executions across all sessions
+    pub fn get_recent_tool_executions(&self, limit: u32) -> Result<Vec<ToolExecutionRecord>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| Error::Internal("Lock poisoned".to_string()))?;
+
+        let mut stmt = conn
+            .prepare(
+                r#"
+                SELECT id, session_id, message_id, tool_name, tool_call_id, input_json,
+                       output_text, status, error_message, duration_ms, created_at, completed_at
+                FROM tool_executions
+                ORDER BY created_at DESC
+                LIMIT ?1
+                "#,
+            )
+            .map_err(|e| Error::Storage(format!("Failed to prepare query: {}", e)))?;
+
+        let executions = stmt
+            .query_map(params![limit], |row| {
+                Ok(ToolExecutionRecord {
+                    id: row.get(0)?,
+                    session_id: row.get(1)?,
+                    message_id: row.get(2)?,
+                    tool_name: row.get(3)?,
+                    tool_call_id: row.get(4)?,
+                    input_json: row.get(5)?,
+                    output_text: row.get(6)?,
+                    status: row.get(7)?,
+                    error_message: row.get(8)?,
+                    duration_ms: row.get(9)?,
+                    created_at: row.get(10)?,
+                    completed_at: row.get(11)?,
+                })
+            })
+            .map_err(|e| Error::Storage(format!("Failed to query tool executions: {}", e)))?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(executions)
+    }
+
+    /// Get failed tool executions (for error analysis)
+    pub fn get_failed_tool_executions(&self, limit: u32) -> Result<Vec<ToolExecutionRecord>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| Error::Internal("Lock poisoned".to_string()))?;
+
+        let mut stmt = conn
+            .prepare(
+                r#"
+                SELECT id, session_id, message_id, tool_name, tool_call_id, input_json,
+                       output_text, status, error_message, duration_ms, created_at, completed_at
+                FROM tool_executions
+                WHERE status IN ('error', 'timeout', 'cancelled')
+                ORDER BY created_at DESC
+                LIMIT ?1
+                "#,
+            )
+            .map_err(|e| Error::Storage(format!("Failed to prepare query: {}", e)))?;
+
+        let executions = stmt
+            .query_map(params![limit], |row| {
+                Ok(ToolExecutionRecord {
+                    id: row.get(0)?,
+                    session_id: row.get(1)?,
+                    message_id: row.get(2)?,
+                    tool_name: row.get(3)?,
+                    tool_call_id: row.get(4)?,
+                    input_json: row.get(5)?,
+                    output_text: row.get(6)?,
+                    status: row.get(7)?,
+                    error_message: row.get(8)?,
+                    duration_ms: row.get(9)?,
+                    created_at: row.get(10)?,
+                    completed_at: row.get(11)?,
+                })
+            })
+            .map_err(|e| Error::Storage(format!("Failed to query failed executions: {}", e)))?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(executions)
+    }
+
+    /// Get token usage history
+    pub fn get_token_usage_history(&self, limit: u32) -> Result<Vec<TokenUsageRecord>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| Error::Internal("Lock poisoned".to_string()))?;
+
+        let mut stmt = conn
+            .prepare(
+                r#"
+                SELECT session_id, provider, model, input_tokens, output_tokens,
+                       cache_read_tokens, cache_write_tokens, COALESCE(thinking_tokens, 0), cost_cents
+                FROM token_usage
+                ORDER BY recorded_at DESC
+                LIMIT ?1
+                "#,
+            )
+            .map_err(|e| Error::Storage(format!("Failed to prepare query: {}", e)))?;
+
+        let records = stmt
+            .query_map(params![limit], |row| {
+                Ok(TokenUsageRecord {
+                    session_id: row.get(0)?,
+                    provider: row.get(1)?,
+                    model: row.get(2)?,
+                    input_tokens: row.get(3)?,
+                    output_tokens: row.get(4)?,
+                    cache_read_tokens: row.get(5)?,
+                    cache_write_tokens: row.get(6)?,
+                    thinking_tokens: row.get(7)?,
+                    cost_cents: row.get(8)?,
+                })
+            })
+            .map_err(|e| Error::Storage(format!("Failed to query token usage: {}", e)))?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(records)
+    }
+
+    /// Get usage by provider/model
+    pub fn get_usage_by_provider(&self) -> Result<Vec<(String, String, UsageSummary)>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| Error::Internal("Lock poisoned".to_string()))?;
+
+        let mut stmt = conn
+            .prepare(
+                r#"
+                SELECT provider, model,
+                       COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0),
+                       COALESCE(SUM(cost_cents), 0), COUNT(*)
+                FROM token_usage
+                GROUP BY provider, model
+                ORDER BY SUM(cost_cents) DESC
+                "#,
+            )
+            .map_err(|e| Error::Storage(format!("Failed to prepare query: {}", e)))?;
+
+        let results = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    UsageSummary {
+                        total_input_tokens: row.get(2)?,
+                        total_output_tokens: row.get(3)?,
+                        total_cost_cents: row.get(4)?,
+                        request_count: row.get(5)?,
+                    },
+                ))
+            })
+            .map_err(|e| Error::Storage(format!("Failed to query usage by provider: {}", e)))?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(results)
+    }
 }
 
 // ============================================================================
@@ -626,6 +936,8 @@ pub struct SessionRecord {
     pub total_output_tokens: i64,
     pub total_cost_cents: i64,
     pub message_count: i32,
+    /// Context window token usage (for tracking context limits)
+    pub context_tokens: i64,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -642,6 +954,7 @@ impl Default for SessionRecord {
             total_output_tokens: 0,
             total_cost_cents: 0,
             message_count: 0,
+            context_tokens: 0,
             created_at: String::new(),
             updated_at: String::new(),
         }
@@ -660,6 +973,8 @@ pub struct MessageRecord {
     pub input_tokens: i32,
     pub output_tokens: i32,
     pub finish_reason: Option<String>,
+    /// Additional metadata (JSON, for extensibility)
+    pub metadata: Option<String>,
     pub created_at: String,
 }
 
@@ -675,6 +990,7 @@ impl Default for MessageRecord {
             input_tokens: 0,
             output_tokens: 0,
             finish_reason: None,
+            metadata: None,
             created_at: String::new(),
         }
     }
@@ -690,6 +1006,8 @@ pub struct TokenUsageRecord {
     pub output_tokens: i64,
     pub cache_read_tokens: i64,
     pub cache_write_tokens: i64,
+    /// Thinking/reasoning tokens (for extended thinking models)
+    pub thinking_tokens: i64,
     pub cost_cents: i64,
 }
 

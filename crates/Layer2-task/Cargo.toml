@@ -11,7 +11,7 @@ license.workspace = true
 forge-foundation = { workspace = true }
 
 # Async
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time", "process", "io-util"] }
 async-trait = { workspace = true }
 futures = { workspace = true }
 
@@ -32,3 +32,15 @@ tracing = { workspace = true }
 # Utilities
 uuid = { workspace = true }
 chrono = { workspace = true }
+dirs = { workspace = true }
+rand = { workspace = true }
+
+# HTTP client
+reqwest = { workspace = true }
+
+# PTY support
+portable-pty = { workspace = true }
+
+# Platform-specific
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

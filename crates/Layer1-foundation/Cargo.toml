@@ -8,7 +8,7 @@ license.workspace = true
 
 [dependencies]
 # Async
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "sync", "macros"] }
 async-trait = { workspace = true }
 
 # Serialization
@@ -32,3 +32,6 @@ chrono = { workspace = true }
 dirs = { workspace = true }
 regex = { workspace = true }
 glob = { workspace = true }
+
+# HTTP Client (for tokenizer)
+reqwest = { workspace = true }

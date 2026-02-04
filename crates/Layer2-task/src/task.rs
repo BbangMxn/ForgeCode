@@ -32,8 +32,12 @@ impl std::fmt::Display for TaskId {
 /// Execution mode for a task
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ExecutionMode {
-    /// Execute locally on the host
+    /// Execute locally on the host (standard process)
     Local,
+
+    /// Execute with PTY support (for interactive commands)
+    /// Use this for commands that need terminal emulation (vim, htop, etc.)
+    Pty,
 
     /// Execute in a Docker container
     Container {

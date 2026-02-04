@@ -7,15 +7,18 @@ authors.workspace = true
 license.workspace = true
 
 [dependencies]
-# Internal
+# Internal - Layer1
 forge-foundation = { workspace = true }
+
+# Internal - Layer2 (all core services)
+forge-core = { workspace = true }
 forge-provider = { workspace = true }
-forge-tool = { workspace = true }
 forge-task = { workspace = true }
 
 # Async
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time"] }
 async-trait = { workspace = true }
+async-stream = { workspace = true }
 futures = { workspace = true }
 
 # Serialization
@@ -32,3 +35,4 @@ tracing = { workspace = true }
 # Utilities
 uuid = { workspace = true }
 chrono = { workspace = true }
+regex = "1"

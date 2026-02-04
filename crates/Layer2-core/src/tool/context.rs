@@ -2,16 +2,31 @@
 //!
 //! Layer1 ToolContext trait 구현
 //! - PermissionService 연동
+//! - PermissionDelegate 연동 (대화형 권한 승인)
 //! - ShellConfig 연동
+//!
+//! ## 대화형 권한 승인
+//!
+//! `PermissionDelegate`를 설정하면 권한이 필요할 때 UI에 프롬프트를 표시합니다.
+//!
+//! ```ignore
+//! let delegate = Arc::new(MyCliDelegate::new());
+//! let ctx = RuntimeContext::new(session_id, working_dir, permissions)
+//!     .with_permission_delegate(delegate);
+//!
+//! // 권한 요청 시 delegate.request_permission()이 호출됨
+//! let result = tool.execute(input, &ctx).await?;
+//! ```
 
 use async_trait::async_trait;
 use forge_foundation::{
-    PermissionAction, PermissionService, PermissionStatus, Result, ShellConfig, ShellType,
-    ToolContext,
+    PermissionAction, PermissionDelegate, PermissionResponse,
+    PermissionService, PermissionStatus, Result, ShellConfig, ShellType, ToolContext,
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use tracing::debug;
 
 // ============================================================================
 // DefaultShellConfig - 기본 Shell 설정
@@ -108,12 +123,14 @@ impl ShellConfig for DefaultShellConfig {
 /// - 세션 정보
 /// - 환경 변수
 /// - 권한 서비스
+/// - 권한 델리게이트 (대화형 권한 승인)
 /// - Shell 설정
 pub struct RuntimeContext {
     session_id: String,
     working_dir: PathBuf,
     env: HashMap<String, String>,
     permissions: Arc<PermissionService>,
+    permission_delegate: Option<Arc<dyn PermissionDelegate>>,
     shell_config: Box<dyn ShellConfig>,
 }
 
@@ -129,6 +146,7 @@ impl RuntimeContext {
             working_dir: working_dir.clone(),
             env: std::env::vars().collect(),
             permissions,
+            permission_delegate: None,
             shell_config: Box::new(DefaultShellConfig::new().with_working_dir(working_dir)),
         }
     }
@@ -145,9 +163,28 @@ impl RuntimeContext {
         self
     }
 
+    /// 권한 델리게이트 설정 (대화형 권한 승인용)
+    ///
+    /// 델리게이트가 설정되면 권한이 Unknown 상태일 때
+    /// UI를 통해 사용자에게 권한 승인을 요청합니다.
+    pub fn with_permission_delegate(mut self, delegate: Arc<dyn PermissionDelegate>) -> Self {
+        self.permission_delegate = Some(delegate);
+        self
+    }
+
     /// 권한 서비스 접근
     pub fn permission_service(&self) -> &PermissionService {
         &self.permissions
+    }
+
+    /// 권한 델리게이트 접근
+    pub fn permission_delegate(&self) -> Option<&Arc<dyn PermissionDelegate>> {
+        self.permission_delegate.as_ref()
+    }
+
+    /// 권한을 직접 부여 (세션 범위)
+    pub fn grant_session(&self, tool_name: &str, action: PermissionAction) {
+        self.permissions.grant_session(tool_name, action);
     }
 }
 
@@ -172,11 +209,75 @@ impl ToolContext for RuntimeContext {
     async fn request_permission(
         &self,
         tool: &str,
-        _description: &str,
+        description: &str,
         action: PermissionAction,
     ) -> Result<bool> {
-        // TODO: PermissionDelegate를 통해 UI에 요청
-        // 현재는 간단히 check 결과 반환
+        // 1. 이미 허용된 경우 바로 반환
+        let status = self.permissions.check(tool, &action);
+        match status {
+            PermissionStatus::Granted | PermissionStatus::AutoApproved => {
+                return Ok(true);
+            }
+            PermissionStatus::Denied => {
+                return Ok(false);
+            }
+            PermissionStatus::Unknown => {
+                // 계속해서 delegate에 요청
+            }
+        }
+
+        // 2. Delegate가 있으면 대화형 권한 승인 요청
+        if let Some(ref delegate) = self.permission_delegate {
+            debug!("Requesting permission via delegate for {}: {:?}", tool, action);
+
+            // 위험도 계산 (action 타입에 따라)
+            let risk_score = match &action {
+                PermissionAction::Execute { .. } => 7,
+                PermissionAction::FileDelete { .. } => 8,
+                PermissionAction::FileWrite { .. } => 5,
+                PermissionAction::FileReadSensitive { .. } => 4,
+                PermissionAction::Network { .. } => 6,
+                PermissionAction::Custom { .. } => 5,
+            };
+
+            let response = delegate
+                .request_permission(tool, &action, description, risk_score)
+                .await;
+
+            match response {
+                PermissionResponse::AllowOnce => {
+                    // 1회만 허용 - 저장하지 않고 true 반환
+                    debug!("Permission granted once for {}", tool);
+                    return Ok(true);
+                }
+                PermissionResponse::AllowSession => {
+                    // 세션 동안 허용
+                    self.permissions.grant_session(tool, action);
+                    debug!("Permission granted for session for {}", tool);
+                    return Ok(true);
+                }
+                PermissionResponse::AllowPermanent => {
+                    // 영구 허용
+                    if let Err(e) = self.permissions.grant_permanent(tool, action) {
+                        debug!("Failed to save permanent permission: {}", e);
+                        // 저장 실패해도 일단 허용
+                    }
+                    debug!("Permission granted permanently for {}", tool);
+                    return Ok(true);
+                }
+                PermissionResponse::Deny => {
+                    debug!("Permission denied for {}", tool);
+                    return Ok(false);
+                }
+                PermissionResponse::DenyPermanent => {
+                    // TODO: 영구 거부 저장
+                    debug!("Permission denied permanently for {}", tool);
+                    return Ok(false);
+                }
+            }
+        }
+
+        // 3. Delegate가 없으면 기존 권한 상태만 확인
         Ok(self.permissions.is_permitted(tool, &action))
     }
 

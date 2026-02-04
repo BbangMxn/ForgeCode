@@ -1,6 +1,10 @@
 //! Provider-specific error types
+//!
+//! ProviderError는 LLM 제공자 관련 세부 에러를 관리합니다.
+//! forge_foundation::Error와의 변환을 지원합니다.
 
 use crate::retry::{RetryClassification, RetryableError};
+use forge_foundation::Error as FoundationError;
 use thiserror::Error;
 
 /// Errors that can occur during provider operations
@@ -162,4 +166,53 @@ fn extract_retry_after(body: &str) -> Option<u64> {
     }
 
     None
+}
+
+// ============================================================================
+// forge_foundation::Error 변환
+// ============================================================================
+
+impl From<ProviderError> for FoundationError {
+    fn from(err: ProviderError) -> Self {
+        match err {
+            ProviderError::Authentication(msg) => FoundationError::Api {
+                provider: "unknown".to_string(),
+                message: format!("Authentication failed: {}", msg),
+            },
+            ProviderError::RateLimited { retry_after_ms } => FoundationError::RateLimited(
+                retry_after_ms
+                    .map(|ms| format!("Retry after {}ms", ms))
+                    .unwrap_or_else(|| "Rate limited".to_string()),
+            ),
+            ProviderError::ContextLengthExceeded(msg) => FoundationError::Api {
+                provider: "unknown".to_string(),
+                message: format!("Context length exceeded: {}", msg),
+            },
+            ProviderError::ContentFiltered(msg) => FoundationError::Api {
+                provider: "unknown".to_string(),
+                message: format!("Content filtered: {}", msg),
+            },
+            ProviderError::ServerError(msg) => FoundationError::Api {
+                provider: "unknown".to_string(),
+                message: format!("Server error: {}", msg),
+            },
+            ProviderError::RequestFailed(msg) => FoundationError::Http(msg),
+            ProviderError::Network(msg) => FoundationError::Http(format!("Network: {}", msg)),
+            ProviderError::InvalidRequest(msg) => FoundationError::InvalidInput(msg),
+            ProviderError::InvalidResponse(msg) => {
+                FoundationError::Provider(format!("Invalid response: {}", msg))
+            }
+            ProviderError::ModelNotAvailable(msg) => FoundationError::ProviderNotFound(msg),
+            ProviderError::ModelNotFound(msg) => FoundationError::ProviderNotFound(msg),
+            ProviderError::QuotaExceeded(msg) => FoundationError::RateLimited(msg),
+            ProviderError::StreamError(msg) => {
+                FoundationError::Provider(format!("Stream error: {}", msg))
+            }
+            ProviderError::ParseError(msg) => {
+                FoundationError::Provider(format!("Parse error: {}", msg))
+            }
+            ProviderError::NotConfigured(msg) => FoundationError::Config(msg),
+            ProviderError::Unknown(msg) => FoundationError::Provider(msg),
+        }
+    }
 }

@@ -11,15 +11,19 @@ name = "forge"
 path = "src/main.rs"
 
 [dependencies]
-# Internal
+# Internal - Layer1
 forge-foundation = { workspace = true }
+
+# Internal - Layer2
+forge-core = { workspace = true }
 forge-provider = { workspace = true }
-forge-tool = { workspace = true }
 forge-task = { workspace = true }
+
+# Internal - Layer3
 forge-agent = { workspace = true }
 
 # Async
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time", "signal"] }
 futures = { workspace = true }
 
 # TUI

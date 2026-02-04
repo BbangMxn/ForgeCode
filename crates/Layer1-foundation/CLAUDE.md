@@ -870,15 +870,373 @@ pub mod shell_store { /* registry::shell types */ }
 pub mod provider_store { /* registry::provider types */ }
 ```
 
-### 다음 단계 (Layer2)
+---
 
-Layer1이 완성되었으므로 Layer2-tool에서:
+## 10. Event System (`event/`)
 
-1. **도구 구현**: `Tool` trait 구현
-   - BashTool, ReadTool, WriteTool, EditTool, GlobTool, GrepTool
+전역 이벤트 버스를 통한 느슨한 결합 이벤트 시스템입니다.
+
+### EventBus
+
+```rust
+use forge_foundation::{EventBus, ForgeEvent, EventCategory, EventSeverity};
+
+// 전역 이벤트 버스 초기화 및 사용
+init_global_event_bus(EventBusConfig::default())?;
+let bus = global_event_bus();
+
+// 이벤트 발행
+bus.publish(ForgeEvent::new(
+    EventCategory::Tool,
+    EventSeverity::Info,
+    "Tool execution completed",
+)).await;
+
+// 리스너 등록
+let listener_id = bus.subscribe(|event| {
+    println!("[{}] {}: {}", event.severity, event.category, event.message);
+}).await;
+
+// 필터링된 구독
+let filter = EventFilter::new()
+    .category(EventCategory::Security)
+    .min_severity(EventSeverity::Warning);
+bus.subscribe_filtered(filter, |event| { /* ... */ }).await;
+```
+
+### ForgeEvent
+
+```rust
+pub struct ForgeEvent {
+    pub id: EventId,
+    pub timestamp: DateTime<Utc>,
+    pub category: EventCategory,
+    pub severity: EventSeverity,
+    pub message: String,
+    pub metadata: HashMap<String, Value>,
+}
+
+pub enum EventCategory {
+    Tool,       // 도구 실행 관련
+    Permission, // 권한 관련
+    Security,   // 보안 관련
+    Session,    // 세션 관련
+    System,     // 시스템 관련
+}
+
+pub enum EventSeverity {
+    Debug,
+    Info,
+    Warning,
+    Error,
+    Critical,
+}
+```
+
+---
+
+## 11. Audit System (`audit/`)
+
+보안 감사 및 컴플라이언스를 위한 감사 로깅 시스템입니다.
+
+### AuditLogger
+
+```rust
+use forge_foundation::{AuditLogger, AuditAction, AuditEntry, AuditQuery};
+
+// 감사 로거 초기화
+let logger = AuditLogger::new(AuditLoggerConfig {
+    log_dir: PathBuf::from("~/.forgecode/audit"),
+    retention_days: 90,
+    ..Default::default()
+})?;
+
+// 감사 이벤트 기록
+logger.log(AuditEntry::new(
+    AuditAction::ToolExecution,
+    "bash",
+    json!({ "command": "npm install" }),
+)).await?;
+
+// 감사 로그 조회
+let entries = logger.query(AuditQuery::new()
+    .action(AuditAction::ToolExecution)
+    .since(chrono::Utc::now() - chrono::Duration::hours(24))
+).await?;
+
+// 통계 조회
+let stats = logger.statistics(None, None).await?;
+println!("Total entries: {}", stats.total_entries);
+```
+
+### AuditAction
+
+```rust
+pub enum AuditAction {
+    ToolExecution,      // 도구 실행
+    PermissionGrant,    // 권한 승인
+    PermissionDeny,     // 권한 거부
+    SessionStart,       // 세션 시작
+    SessionEnd,         // 세션 종료
+    FileAccess,         // 파일 접근
+    ConfigChange,       // 설정 변경
+    SecurityEvent,      // 보안 이벤트
+}
+```
+
+### EventBus 통합
+
+```rust
+// AuditLogger를 EventBus에 연결
+let audit_listener = AuditEventListener::new(logger);
+bus.subscribe(move |event| {
+    audit_listener.handle(event);
+}).await;
+```
+
+---
+
+## 12. Cache System (`cache/`)
+
+성능 최적화를 위한 다계층 캐시 시스템입니다.
+
+### CacheManager
+
+```rust
+use forge_foundation::{CacheManager, CacheConfig};
+
+// 캐시 매니저 초기화
+let cache = CacheManager::new(CacheConfig {
+    context_cache: ContextCacheConfig {
+        max_size_bytes: 100 * 1024 * 1024, // 100MB
+        ttl_seconds: 3600,
+    },
+    response_cache: ResponseCacheConfig {
+        enabled: true,
+        max_entries: 1000,
+    },
+    ..Default::default()
+})?;
+
+// Tool 결과 캐시
+let result = cache.get_tool_result("Read", &args).await;
+if result.is_none() {
+    let output = execute_tool(&args).await?;
+    cache.set_tool_result("Read", &args, &output).await;
+}
+
+// MCP 결과 캐시
+cache.set_mcp_result("notion:get-page", &args, &result).await;
+
+// 캐시 통계
+let stats = cache.stats();
+println!("Hit rate: {:.2}%", stats.hit_rate * 100.0);
+```
+
+### Context Compaction
+
+대화 히스토리를 압축하여 토큰을 절약합니다.
+
+```rust
+use forge_foundation::{ContextCompactor, ObservationMasker, ConversationSummarizer};
+
+// Observation 마스킹 (Tool 결과 축약)
+let masker = ObservationMasker::new();
+let masked = masker.mask_large_outputs(messages, 2000);
+
+// 대화 요약
+let summarizer = ConversationSummarizer::new();
+let summary = summarizer.summarize(&messages, max_tokens).await?;
+
+// 통합 Compactor
+let compactor = ContextCompactor::new(config);
+let compacted = compactor.compact(&mut history)?;
+```
+
+### LRU Cache
+
+```rust
+use forge_foundation::{LruCache, TtlLruCache};
+
+// 기본 LRU 캐시
+let cache = LruCache::new(100);
+cache.put("key", "value");
+let value = cache.get(&"key");
+
+// TTL + LRU 캐시
+let cache = TtlLruCache::new(100, Duration::from_secs(300));
+cache.put("key", "value");
+```
+
+---
+
+## 13. Tokenizer System (`tokenizer/`)
+
+모델별 정확한 토큰 계산을 위한 토크나이저 시스템입니다.
+
+### Tokenizer Trait
+
+```rust
+use forge_foundation::{Tokenizer, TokenizerFactory, ModelFamily};
+
+// 토크나이저 팩토리로 생성
+let tokenizer = TokenizerFactory::create(ModelFamily::Claude)?;
+
+// 토큰 계산
+let count = tokenizer.count_tokens("Hello, world!")?;
+println!("Token count: {}", count);
+
+// 인코딩
+let result = tokenizer.encode("Hello, world!")?;
+println!("Tokens: {:?}", result.tokens);
+
+// 디코딩
+let text = tokenizer.decode(&result.tokens)?;
+```
+
+### 지원 모델 패밀리
+
+| Family | Tokenizer | 모델 |
+|--------|-----------|------|
+| `Claude` | ClaudeEstimator | claude-sonnet-4, claude-opus-4 |
+| `OpenAI` | TiktokenEstimator | gpt-4o, o1 |
+| `Gemini` | GeminiEstimator | gemini-2.0-flash, gemini-1.5-pro |
+| `Llama` | LlamaEstimator | llama-3.3, codellama |
+
+### Dynamic Tokenizer (로컬 모델)
+
+Ollama, vLLM, LM Studio 등 로컬 모델을 위한 동적 토크나이저입니다.
+
+```rust
+use forge_foundation::{DynamicTokenizerRegistry, OllamaTokenizer, OpenAICompatTokenizer};
+
+// Ollama 토크나이저
+let ollama = OllamaTokenizer::new("http://localhost:11434", "llama3")?;
+let count = ollama.count_tokens("Hello")?;
+
+// OpenAI 호환 API (vLLM, LM Studio)
+let vllm = OpenAICompatTokenizer::new("http://localhost:8000", "model-name")?;
+
+// 레지스트리에 등록
+let mut registry = DynamicTokenizerRegistry::new();
+registry.register("ollama:llama3", Box::new(ollama));
+registry.register("vllm:model", Box::new(vllm));
+```
+
+### Token Budget
+
+토큰 예산 관리를 위한 유틸리티입니다.
+
+```rust
+use forge_foundation::{TokenBudget, TokenDistribution};
+
+let budget = TokenBudget::new(200_000) // 총 200k 토큰
+    .reserve_system(10_000)            // 시스템 프롬프트용 10k
+    .reserve_tools(5_000)              // 도구 정의용 5k
+    .reserve_output(8_000);            // 출력용 8k
+
+let available = budget.available_for_history(); // 대화 히스토리용
+println!("Available for history: {} tokens", available);
+
+let distribution = budget.distribution();
+println!("System: {}%, History: {}%, Output: {}%",
+    distribution.system_percent,
+    distribution.history_percent,
+    distribution.output_percent
+);
+```
+
+---
+
+## 14. 모듈 구조 (전체)
+
+```
+Layer1-foundation/src/
+│
+├── lib.rs                         # 공개 API Export
+├── error/mod.rs                   # Error, Result
+│
+├── core/                          # 핵심 인터페이스
+│   ├── mod.rs
+│   ├── traits.rs                  # Tool, Provider, Task, PermissionDelegate
+│   └── types.rs                   # ToolSource, PermissionRule, SessionInfo
+│
+├── permission/                    # 권한 시스템
+│   ├── mod.rs
+│   ├── types.rs                   # PermissionDef, PermissionRegistry
+│   ├── service.rs                 # PermissionService
+│   ├── settings.rs                # PermissionSettings (JSON)
+│   └── security.rs                # CommandAnalyzer, PathAnalyzer
+│
+├── registry/                      # 레지스트리
+│   ├── mod.rs
+│   ├── mcp/                       # MCP 서버 설정
+│   ├── provider/                  # LLM Provider 설정
+│   ├── model/                     # 모델 정보
+│   └── shell/                     # Shell 설정
+│
+├── config/                        # 통합 설정
+│   ├── mod.rs
+│   ├── forge.rs                   # ForgeConfig
+│   └── limits.rs                  # LimitsConfig
+│
+├── storage/                       # 저장소
+│   ├── mod.rs
+│   ├── db.rs                      # SQLite
+│   └── json/                      # JsonStore
+│
+├── event/                         # 이벤트 시스템 (NEW)
+│   ├── mod.rs
+│   ├── bus.rs                     # EventBus
+│   └── types.rs                   # ForgeEvent, EventCategory
+│
+├── audit/                         # 감사 로깅 (NEW)
+│   ├── mod.rs
+│   ├── logger.rs                  # AuditLogger
+│   └── types.rs                   # AuditEntry, AuditAction
+│
+├── cache/                         # 캐시 시스템 (NEW)
+│   ├── mod.rs
+│   ├── manager.rs                 # CacheManager
+│   ├── config.rs                  # CacheConfig
+│   ├── context/                   # 컨텍스트 압축
+│   │   ├── mod.rs
+│   │   ├── masker.rs              # ObservationMasker
+│   │   ├── summarizer.rs          # ConversationSummarizer
+│   │   └── compactor.rs           # ContextCompactor
+│   ├── response/                  # 응답 캐시
+│   │   ├── mod.rs
+│   │   ├── tool.rs                # ToolCache
+│   │   └── mcp.rs                 # McpCache
+│   └── util/                      # 유틸리티
+│       ├── mod.rs
+│       ├── lru.rs                 # LruCache
+│       └── hash.rs                # 해시 유틸
+│
+└── tokenizer/                     # 토크나이저 (NEW)
+    ├── mod.rs
+    ├── traits.rs                  # Tokenizer trait
+    ├── types.rs                   # TokenCount, ModelFamily
+    ├── factory.rs                 # TokenizerFactory
+    ├── estimator.rs               # Claude/OpenAI/Gemini/Llama Estimator
+    └── dynamic.rs                 # Ollama, vLLM 토크나이저
+```
+
+---
+
+## 15. 다음 단계 (Layer2)
+
+Layer1이 완성되었으므로 Layer2에서:
+
+1. **도구 구현** (Layer2-core): `Tool` trait 구현
+   - BashTool, ReadTool, WriteTool, EditTool, GlobTool, GrepTool, WebSearch, WebFetch
 
 2. **권한 등록**: 각 도구가 `register_permissions()` 호출
    - Layer1의 `PermissionRegistry`에 권한 정의 등록
 
 3. **Shell 연동**: `ToolContext.shell_config()` 사용
    - OS별 최적화된 Shell 실행
+
+4. **캐시 활용**: 도구 결과 캐싱으로 성능 최적화
+
+5. **이벤트 발행**: 도구 실행 이벤트를 EventBus에 발행

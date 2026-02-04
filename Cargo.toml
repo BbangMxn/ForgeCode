@@ -4,7 +4,6 @@ members = [
     "crates/Layer1-foundation",
     "crates/Layer2-core",
     "crates/Layer2-provider",
-    "crates/Layer2-tool",
     "crates/Layer2-task",
     "crates/Layer3-agent",
     "crates/Layer4-cli",
@@ -19,8 +18,8 @@ repository = "https://github.com/forgecode/forgecode"
 rust-version = "1.75"
 
 [workspace.dependencies]
-# Async Runtime
-tokio = { version = "1.43", features = ["full"] }
+# Async Runtime - base package, features specified per-crate
+tokio = { version = "1.43" }
 futures = "0.3"
 async-trait = "0.1"
 async-stream = "0.3"
@@ -62,8 +61,11 @@ dirs = "5.0"
 glob = "0.3"
 grep-regex = "0.1"
 ignore = "0.4"
+rayon = "1.10"
+parking_lot = "0.12"
 which = "7.0"
 regex = "1.11"
+rand = "0.8"
 
 # PTY and Shell
 portable-pty = "0.9"
@@ -74,12 +76,20 @@ shlex = "1.3"
 forge-foundation = { path = "crates/Layer1-foundation" }
 forge-core = { path = "crates/Layer2-core" }
 forge-provider = { path = "crates/Layer2-provider" }
-forge-tool = { path = "crates/Layer2-tool" }
 forge-task = { path = "crates/Layer2-task" }
 forge-agent = { path = "crates/Layer3-agent" }
 
+[profile.dev]
+opt-level = 1          # Faster compile, reasonable performance
+
 [profile.release]
-lto = true
-codegen-units = 1
-panic = "abort"
-strip = true
+lto = true             # Link-time optimization
+codegen-units = 1      # Better optimization
+panic = "abort"        # Smaller binary
+strip = true           # Remove symbols
+opt-level = 3          # Maximum optimization
+
+[profile.release-with-debug]
+inherits = "release"
+debug = true           # Include debug info for profiling
+strip = false
