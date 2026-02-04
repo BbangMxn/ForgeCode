@@ -19,6 +19,7 @@ pub mod container;
 pub mod executor;
 pub mod log;
 pub mod manager;
+pub mod orchestrator;
 pub mod state;
 pub mod subagent;
 pub mod task;
@@ -56,4 +57,10 @@ pub use subagent::{
     Discovery, DiscoveryId, EffectiveTokenBudget, ModelSelection, PermissionMode, SubAgent,
     SubAgentConfig, SubAgentContext, SubAgentId, SubAgentManager, SubAgentState, SubAgentType,
     TokenBudgetConfig, TokenBudgetSource, TokenReport,
+};
+
+// Orchestrator system (Task 간 통신 및 조율)
+pub use orchestrator::{
+    InteractionAction, InteractionLog, OrchestratorConfig, TaskGroup, TaskGroupId, TaskMessage,
+    TaskOrchestrator, TaskSignal, WaitCondition, WaitResult,
 };
