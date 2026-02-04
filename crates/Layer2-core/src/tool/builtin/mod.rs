@@ -34,6 +34,9 @@ pub mod write;
 // Execute tools
 pub mod bash;
 
+// Task tools
+pub mod task;
+
 // Web tools (temporarily disabled due to API mismatch)
 // TODO: Fix web_fetch and web_search to match Layer1 Tool trait
 // pub mod web_fetch;
@@ -49,12 +52,15 @@ pub use read::ReadTool;
 // pub use web_search::WebSearchTool;
 pub use write::WriteTool;
 
+// Task tools
+pub use task::task_tools;
+
 use forge_foundation::Tool;
 use std::sync::Arc;
 
 /// 모든 builtin 도구 인스턴스 생성
 pub fn all_tools() -> Vec<Arc<dyn Tool>> {
-    vec![
+    let mut tools: Vec<Arc<dyn Tool>> = vec![
         // Filesystem
         Arc::new(ReadTool::new()) as Arc<dyn Tool>,
         Arc::new(WriteTool::new()),
@@ -66,7 +72,12 @@ pub fn all_tools() -> Vec<Arc<dyn Tool>> {
         // Web (temporarily disabled)
         // Arc::new(WebSearchTool::new()),
         // Arc::new(WebFetchTool::new()),
-    ]
+    ];
+
+    // Task tools
+    tools.extend(task_tools());
+
+    tools
 }
 
 /// 핵심 도구만 반환 (빠른 시작용)
@@ -102,8 +113,8 @@ mod tests {
     #[test]
     fn test_all_tools() {
         let tools = all_tools();
-        // 6 tools (web_search and web_fetch temporarily disabled)
-        assert_eq!(tools.len(), 6);
+        // 6 core tools + 7 task tools = 13 (web_search and web_fetch temporarily disabled)
+        assert_eq!(tools.len(), 13);
 
         let names: Vec<_> = tools.iter().map(|t| t.name()).collect();
         assert!(names.contains(&"read"));
@@ -112,6 +123,14 @@ mod tests {
         assert!(names.contains(&"glob"));
         assert!(names.contains(&"grep"));
         assert!(names.contains(&"bash"));
+        // Task tools
+        assert!(names.contains(&"task_spawn"));
+        assert!(names.contains(&"task_wait"));
+        assert!(names.contains(&"task_logs"));
+        assert!(names.contains(&"task_stop"));
+        assert!(names.contains(&"task_send"));
+        assert!(names.contains(&"task_list"));
+        assert!(names.contains(&"task_status"));
         // Temporarily disabled
         // assert!(names.contains(&"web_search"));
         // assert!(names.contains(&"web_fetch"));

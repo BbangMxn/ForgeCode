@@ -7,8 +7,9 @@ authors.workspace = true
 license.workspace = true
 
 [dependencies]
-# Internal - Layer1 완전 활용
+# Internal - Layer1, Layer2 활용
 forge-foundation = { workspace = true }
+forge-task = { workspace = true }
 
 # Async
 tokio = { workspace = true, features = ["rt-multi-thread", "io-std", "io-util", "macros", "time", "sync", "process", "net", "fs"] }
@@ -35,6 +36,7 @@ tracing = { workspace = true }
 
 # Utilities
 uuid = { workspace = true }
+lazy_static = "1.5"
 glob = { workspace = true }
 ignore = { workspace = true }
 which = { workspace = true }
