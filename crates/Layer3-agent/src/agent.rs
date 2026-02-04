@@ -634,97 +634,93 @@ impl Agent {
         &self,
         _session_id: &str,
         tool_name: &str,
-        tool_call_id: &str,
+        _tool_call_id: &str,
         arguments: Value,
-        tool_ctx: &dyn forge_core::ToolContext,
-        event_tx: &mpsc::Sender<AgentEvent>,
+        _tool_ctx: &dyn forge_core::ToolContext,
+        _event_tx: &mpsc::Sender<AgentEvent>,
     ) -> Result<String> {
         // Get available tools for recovery context
         let available_tools: Vec<String> = self
             .ctx
-            .tools
-            .list()
-            .iter()
-            .map(|(name, _)| name.to_string())
+            .list_tools()
+            .await
+            .into_iter()
+            .map(|(name, _)| name)
             .collect();
 
         let mut recovery_ctx =
-            RecoveryContext::new(&tool_ctx.working_dir().to_string_lossy(), available_tools);
+            RecoveryContext::new(&self.ctx.working_dir.to_string_lossy(), available_tools);
 
         let mut current_tool = tool_name.to_string();
         let mut current_args = arguments;
 
         loop {
-            // Execute tool
+            // Execute tool via AgentContext (delegates to Layer2-core)
             let result = self
                 .ctx
-                .tools
-                .execute(&current_tool, tool_ctx, current_args.clone())
+                .execute_tool(&current_tool, current_args.clone())
                 .await;
 
-            if result.success {
-                return Ok(result.content);
-            }
-
-            // Tool failed - attempt recovery
-            let error_msg = result.error.unwrap_or_else(|| "Unknown error".to_string());
-            info!(
-                "Tool '{}' failed: {}. Attempting recovery...",
-                current_tool, error_msg
-            );
-
-            let action = self
-                .error_recovery
-                .handle_error(&current_tool, &current_args, &error_msg, &mut recovery_ctx)
-                .await;
-
-            match action {
-                RecoveryAction::Retry {
-                    modified_input,
-                    reason,
-                } => {
-                    info!("Recovery: Retrying with modified input - {}", reason);
-                    current_args = modified_input;
+            match result {
+                Ok(exec_result) if exec_result.success => {
+                    return Ok(exec_result.output);
                 }
-
-                RecoveryAction::UseFallback {
-                    tool,
-                    input,
-                    reason,
-                } => {
-                    info!("Recovery: Using fallback tool '{}' - {}", tool, reason);
-                    current_tool = tool;
-                    current_args = input;
-                }
-
-                RecoveryAction::WaitAndRetry { delay_ms, reason } => {
-                    info!("Recovery: Waiting {}ms - {}", delay_ms, reason);
-                    tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
-                }
-
-                RecoveryAction::AskUser { question, context } => {
-                    let error_with_question = format!(
-                        "Tool failed: {}\n\nRecovery question: {}\nContext: {}",
-                        error_msg, question, context
+                Ok(exec_result) => {
+                    // Tool executed but failed - attempt recovery
+                    let error_msg = exec_result.error.unwrap_or_else(|| "Unknown error".to_string());
+                    info!(
+                        "Tool '{}' failed: {}. Attempting recovery...",
+                        current_tool, error_msg
                     );
-                    return Err(Error::Tool(error_with_question));
-                }
 
-                RecoveryAction::GiveUp {
-                    reason,
-                    suggestions,
-                } => {
-                    let error_with_help = format!(
-                        "Tool failed: {}\nReason: {}\nSuggestions:\n{}",
-                        error_msg,
-                        reason,
-                        suggestions
-                            .iter()
-                            .map(|s| format!("  - {}", s))
-                            .collect::<Vec<_>>()
-                            .join("\n")
-                    );
-                    return Err(Error::Tool(error_with_help));
+                    let action = self
+                        .error_recovery
+                        .handle_error(&current_tool, &current_args, &error_msg, &mut recovery_ctx)
+                        .await;
+
+                    match action {
+                        RecoveryAction::Retry { modified_input, reason } => {
+                            info!("Recovery: Retrying with modified input - {}", reason);
+                            current_args = modified_input;
+                        }
+
+                        RecoveryAction::UseFallback { tool, input, reason } => {
+                            info!("Recovery: Using fallback tool '{}' - {}", tool, reason);
+                            current_tool = tool;
+                            current_args = input;
+                        }
+
+                        RecoveryAction::WaitAndRetry { delay_ms, reason } => {
+                            info!("Recovery: Waiting {}ms - {}", delay_ms, reason);
+                            tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+                        }
+
+                        RecoveryAction::AskUser { question, context } => {
+                            let error_with_question = format!(
+                                "Tool failed: {}\n\nRecovery question: {}\nContext: {}",
+                                error_msg, question, context
+                            );
+                            return Err(Error::Tool(error_with_question));
+                        }
+
+                        RecoveryAction::GiveUp { reason, suggestions } => {
+                            let error_with_help = format!(
+                                "Tool failed: {}\nReason: {}\nSuggestions:\n{}",
+                                error_msg,
+                                reason,
+                                suggestions
+                                    .iter()
+                                    .map(|s| format!("  - {}", s))
+                                    .collect::<Vec<_>>()
+                                    .join("\n")
+                            );
+                            return Err(Error::Tool(error_with_help));
+                        }
+                    }
+                }
+                Err(e) => {
+                    // Tool execution error
+                    return Err(Error::Tool(e.to_string()));
                 }
             }
         }

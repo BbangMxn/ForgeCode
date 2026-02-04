@@ -232,12 +232,16 @@ impl AgentProvider for ForgeNativeProvider {
     }
 
     fn supported_tools(&self) -> Vec<String> {
-        self.ctx
-            .tools
-            .list()
-            .iter()
-            .map(|(name, _)| name.to_string())
-            .collect()
+        // Use blocking call since trait method is sync
+        let rt = tokio::runtime::Handle::current();
+        rt.block_on(async {
+            self.ctx
+                .list_tools()
+                .await
+                .into_iter()
+                .map(|(name, _)| name)
+                .collect()
+        })
     }
 
     async fn is_available(&self) -> bool {
