@@ -1,4 +1,10 @@
 //! Provider trait and common types
+//!
+//! ## 타입 의존성
+//!
+//! - `TokenUsage`: Layer1-foundation에서 re-export (표준 타입)
+//! - `StreamEvent`: 이 레이어 고유 정의 (ProviderError 포함)
+//! - `Message`, `ToolCall`: Layer1-foundation에서 re-export
 
 use crate::error::ProviderError;
 use crate::{Message, ToolCall, ToolDef};
@@ -7,62 +13,8 @@ use futures::Stream;
 use serde::{Deserialize, Serialize};
 use std::pin::Pin;
 
-/// Token usage information
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct TokenUsage {
-    /// Input tokens (prompt)
-    pub input_tokens: u32,
-
-    /// Output tokens (completion)
-    pub output_tokens: u32,
-
-    /// Cached input tokens (if applicable)
-    pub cache_read_tokens: u32,
-
-    /// Tokens used to create cache
-    pub cache_creation_tokens: u32,
-}
-
-impl TokenUsage {
-    /// Total tokens used
-    pub fn total(&self) -> u32 {
-        self.input_tokens + self.output_tokens
-    }
-
-    /// Add another usage to this one
-    pub fn add(&mut self, other: &TokenUsage) {
-        self.input_tokens += other.input_tokens;
-        self.output_tokens += other.output_tokens;
-        self.cache_read_tokens += other.cache_read_tokens;
-        self.cache_creation_tokens += other.cache_creation_tokens;
-    }
-
-    /// Estimate cost in USD (rough approximation)
-    pub fn estimate_cost(&self, input_price_per_1m: f64, output_price_per_1m: f64) -> f64 {
-        let input_cost = (self.input_tokens as f64 / 1_000_000.0) * input_price_per_1m;
-        let output_cost = (self.output_tokens as f64 / 1_000_000.0) * output_price_per_1m;
-        input_cost + output_cost
-    }
-}
-
-impl std::ops::Add for TokenUsage {
-    type Output = Self;
-
-    fn add(self, other: Self) -> Self {
-        Self {
-            input_tokens: self.input_tokens + other.input_tokens,
-            output_tokens: self.output_tokens + other.output_tokens,
-            cache_read_tokens: self.cache_read_tokens + other.cache_read_tokens,
-            cache_creation_tokens: self.cache_creation_tokens + other.cache_creation_tokens,
-        }
-    }
-}
-
-impl std::ops::AddAssign for TokenUsage {
-    fn add_assign(&mut self, other: Self) {
-        self.add(&other);
-    }
-}
+// Re-export TokenUsage from Layer1-foundation (표준 타입)
+pub use forge_foundation::TokenUsage;
 
 /// Events emitted during streaming
 #[derive(Debug, Clone)]

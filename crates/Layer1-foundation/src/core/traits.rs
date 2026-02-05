@@ -92,9 +92,12 @@ impl ToolMeta {
     }
 }
 
-/// 도구 실행 결과
+/// 도구 실행 결과 (Tool trait용)
+///
+/// 이 타입은 `Tool::execute()` 메서드의 반환 타입입니다.
+/// LLM 메시지의 ToolResult와는 다릅니다 (types.rs 참조).
 #[derive(Debug, Clone)]
-pub struct ToolResult {
+pub struct ToolExecutionResult {
     /// 성공 여부
     pub success: bool,
     /// 출력 내용
@@ -105,7 +108,7 @@ pub struct ToolResult {
     pub metadata: HashMap<String, Value>,
 }
 
-impl ToolResult {
+impl ToolExecutionResult {
     pub fn success(output: impl Into<String>) -> Self {
         Self {
             success: true,
@@ -129,7 +132,34 @@ impl ToolResult {
         self.metadata.insert(key.into(), value);
         self
     }
+
+    /// LLM 메시지용 ToolResultMessage로 변환
+    pub fn to_tool_result_message(
+        &self,
+        tool_call_id: impl Into<String>,
+    ) -> super::types::ToolResultMessage {
+        if self.success {
+            super::types::ToolResultMessage::success(tool_call_id, &self.output)
+        } else {
+            super::types::ToolResultMessage::error(
+                tool_call_id,
+                self.error.as_deref().unwrap_or("Unknown error"),
+            )
+        }
+    }
+
+    /// LLM 메시지용 ToolResultMessage로 변환 (deprecated alias)
+    #[deprecated(since = "0.2.0", note = "Use to_tool_result_message instead")]
+    pub fn to_tool_result(
+        &self,
+        tool_call_id: impl Into<String>,
+    ) -> super::types::ToolResultMessage {
+        self.to_tool_result_message(tool_call_id)
+    }
 }
+
+// 하위 호환성을 위한 type alias
+pub type ToolResult = ToolExecutionResult;
 
 /// 도구 인터페이스
 ///
@@ -322,21 +352,18 @@ pub struct ProviderMeta {
     pub capabilities: Vec<String>,
 }
 
-/// 채팅 메시지
+/// 채팅 메시지 (Provider trait 전용)
+///
+/// Note: 일반적인 대화 메시지는 `types::Message`를 사용하세요.
+/// 이 타입은 Provider trait의 저수준 API에서만 사용됩니다.
 #[derive(Debug, Clone)]
 pub struct ChatMessage {
-    pub role: MessageRole,
+    pub role: super::types::MessageRole,
     pub content: String,
 }
 
-/// 메시지 역할
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MessageRole {
-    System,
-    User,
-    Assistant,
-    Tool,
-}
+// MessageRole은 types.rs에서 정의됩니다
+pub use super::types::MessageRole;
 
 /// 채팅 요청
 #[derive(Debug, Clone)]
@@ -353,27 +380,14 @@ pub struct ChatRequest {
 #[derive(Debug, Clone)]
 pub struct ChatResponse {
     pub content: String,
-    pub tool_calls: Vec<ToolCall>,
-    pub usage: Option<TokenUsage>,
+    pub tool_calls: Vec<super::types::ToolCall>,
+    pub usage: Option<super::types::TokenUsage>,
     pub stop_reason: Option<String>,
 }
 
-/// 도구 호출
-#[derive(Debug, Clone)]
-pub struct ToolCall {
-    pub id: String,
-    pub name: String,
-    pub arguments: Value,
-}
-
-/// 토큰 사용량
-#[derive(Debug, Clone, Default)]
-pub struct TokenUsage {
-    pub input_tokens: u32,
-    pub output_tokens: u32,
-    pub cache_read_tokens: Option<u32>,
-    pub cache_creation_tokens: Option<u32>,
-}
+// Note: ToolCall, TokenUsage, StreamEvent는 types.rs에서 정의됩니다.
+// 여기서는 Provider trait에서 사용하기 위해 re-export합니다.
+pub use super::types::{StreamEvent, TokenUsage, ToolCall};
 
 /// LLM 프로바이더 인터페이스
 #[async_trait]
@@ -393,23 +407,6 @@ pub trait Provider: Send + Sync {
 
     /// 연결 테스트
     async fn health_check(&self) -> Result<bool>;
-}
-
-/// 스트리밍 이벤트
-#[derive(Debug, Clone)]
-pub enum StreamEvent {
-    /// 텍스트 청크
-    Text(String),
-    /// 도구 호출 시작
-    ToolCallStart { id: String, name: String },
-    /// 도구 호출 인자 (부분)
-    ToolCallDelta { id: String, delta: String },
-    /// 사용량 정보
-    Usage(TokenUsage),
-    /// 완료
-    Done,
-    /// 에러
-    Error(String),
 }
 
 // ============================================================================

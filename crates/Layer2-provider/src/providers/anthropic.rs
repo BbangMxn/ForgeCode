@@ -48,7 +48,7 @@ impl AnthropicProvider {
                 id: "anthropic".to_string(),
                 display_name: "Anthropic".to_string(),
                 models: models.clone(),
-                default_model: "claude-sonnet-4-20250514".to_string(),
+                default_model: "claude-sonnet-4-5-20250514".to_string(),
                 config_keys: vec![ConfigKey {
                     name: "api_key".to_string(),
                     required: true,
@@ -64,9 +64,47 @@ impl AnthropicProvider {
         }
     }
 
-    /// Get list of available Anthropic models
+    /// Get list of available Anthropic models (2026 updated)
     fn available_models() -> Vec<ModelInfo> {
         vec![
+            // Claude 4.5 Series (Latest - Nov 2025)
+            ModelInfo {
+                id: "claude-opus-4-5-20251124".to_string(),
+                provider: "anthropic".to_string(),
+                display_name: "Claude Opus 4.5".to_string(),
+                context_window: 200000,
+                max_output_tokens: 64000,
+                supports_tools: true,
+                supports_vision: true,
+                supports_thinking: true,
+                input_price_per_1m: 15.0,
+                output_price_per_1m: 75.0,
+            },
+            ModelInfo {
+                id: "claude-sonnet-4-5-20250514".to_string(),
+                provider: "anthropic".to_string(),
+                display_name: "Claude Sonnet 4.5".to_string(),
+                context_window: 200000, // 1M available in beta
+                max_output_tokens: 64000,
+                supports_tools: true,
+                supports_vision: true,
+                supports_thinking: true,
+                input_price_per_1m: 3.0,
+                output_price_per_1m: 15.0,
+            },
+            ModelInfo {
+                id: "claude-haiku-4-5-20250514".to_string(),
+                provider: "anthropic".to_string(),
+                display_name: "Claude Haiku 4.5".to_string(),
+                context_window: 200000,
+                max_output_tokens: 64000,
+                supports_tools: true,
+                supports_vision: true,
+                supports_thinking: false,
+                input_price_per_1m: 0.8,
+                output_price_per_1m: 4.0,
+            },
+            // Claude 4 Series (May 2025)
             ModelInfo {
                 id: "claude-opus-4-20250514".to_string(),
                 provider: "anthropic".to_string(),
@@ -83,25 +121,13 @@ impl AnthropicProvider {
                 id: "claude-sonnet-4-20250514".to_string(),
                 provider: "anthropic".to_string(),
                 display_name: "Claude Sonnet 4".to_string(),
-                context_window: 200000,
+                context_window: 200000, // 1M available in beta
                 max_output_tokens: 16000,
                 supports_tools: true,
                 supports_vision: true,
                 supports_thinking: true,
                 input_price_per_1m: 3.0,
                 output_price_per_1m: 15.0,
-            },
-            ModelInfo {
-                id: "claude-3-5-haiku-20241022".to_string(),
-                provider: "anthropic".to_string(),
-                display_name: "Claude 3.5 Haiku".to_string(),
-                context_window: 200000,
-                max_output_tokens: 8192,
-                supports_tools: true,
-                supports_vision: true,
-                supports_thinking: false,
-                input_price_per_1m: 0.8,
-                output_price_per_1m: 4.0,
             },
         ]
     }
@@ -114,13 +140,20 @@ impl AnthropicProvider {
         system_prompt: Option<&str>,
         stream: bool,
     ) -> AnthropicRequest {
-        let api_messages: Vec<AnthropicMessage> = messages
-            .iter()
-            .filter(|m| m.role != MessageRole::System)
-            .map(|m| m.into())
-            .collect();
+        // Pre-allocate with capacity hint
+        let message_count = messages.iter().filter(|m| m.role != MessageRole::System).count();
+        let mut api_messages = Vec::with_capacity(message_count);
+        for m in messages {
+            if m.role != MessageRole::System {
+                api_messages.push(m.into());
+            }
+        }
 
-        let api_tools: Vec<AnthropicTool> = tools.iter().map(|t| t.into()).collect();
+        // Pre-allocate for tools
+        let mut api_tools = Vec::with_capacity(tools.len());
+        for t in tools {
+            api_tools.push(t.into());
+        }
 
         AnthropicRequest {
             model: self.current_model.id.clone(),
@@ -141,12 +174,20 @@ impl AnthropicProvider {
         &self,
         request: &AnthropicRequest,
     ) -> Result<reqwest::Response, ProviderError> {
-        let response = self
+        let mut req = self
             .client
             .post(ANTHROPIC_API_URL)
-            .header("x-api-key", &self.api_key)
             .header("anthropic-version", ANTHROPIC_VERSION)
-            .header("content-type", "application/json")
+            .header("content-type", "application/json");
+
+        // OAuth 토큰 (sk-ant-oat로 시작) vs 일반 API 키 구분
+        if self.api_key.starts_with("sk-ant-oat") {
+            req = req.header("Authorization", format!("Bearer {}", self.api_key));
+        } else {
+            req = req.header("x-api-key", &self.api_key);
+        }
+
+        let response = req
             .json(request)
             .send()
             .await
@@ -207,9 +248,10 @@ impl Provider for AnthropicProvider {
 
             // Process SSE stream
             let mut byte_stream = response.bytes_stream();
-            let mut buffer = String::new();
-            let mut current_text = String::new();
-            let mut tool_calls: Vec<PartialToolCall> = Vec::new();
+            // Pre-allocated buffer with typical SSE message size
+            let mut buffer = String::with_capacity(4096);
+            let mut current_text = String::with_capacity(2048);
+            let mut tool_calls: Vec<PartialToolCall> = Vec::with_capacity(4);
             let mut usage = TokenUsage::default();
 
             while let Some(chunk_result) = byte_stream.next().await {
@@ -221,102 +263,101 @@ impl Provider for AnthropicProvider {
                     }
                 };
 
-                buffer.push_str(&String::from_utf8_lossy(&chunk));
+                // Optimized: Use Cow to avoid allocation when UTF-8 is valid
+                match std::str::from_utf8(&chunk) {
+                    Ok(s) => buffer.push_str(s),
+                    Err(_) => buffer.push_str(&String::from_utf8_lossy(&chunk)),
+                }
 
-                // Process complete lines
+                // Process complete lines without allocating new strings
                 while let Some(newline_pos) = buffer.find('\n') {
-                    let line = buffer[..newline_pos].trim().to_string();
-                    buffer = buffer[newline_pos + 1..].to_string();
+                    // Process line in-place (trim only, no allocation)
+                    let line = buffer[..newline_pos].trim();
 
-                    if line.is_empty() {
-                        continue;
-                    }
-
-                    if let Some(event) = Self::parse_sse_line(&line) {
-                        match event {
-                            AnthropicStreamEvent::ContentBlockStart { index, content_block } => {
-                                match content_block {
-                                    ContentBlock::Text { .. } => {
-                                        // Text block started
-                                    }
-                                    ContentBlock::ToolUse { id, name, .. } => {
-                                        // Tool call started
-                                        while tool_calls.len() <= index {
-                                            tool_calls.push(PartialToolCall::default());
-                                        }
-                                        tool_calls[index] = PartialToolCall {
-                                            id,
-                                            name: name.clone(),
-                                            arguments: String::new(),
-                                        };
-                                        yield StreamEvent::ToolCallStart {
-                                            index,
-                                            id: tool_calls[index].id.clone(),
-                                            name,
-                                        };
-                                    }
-                                    _ => {}
-                                }
-                            }
-                            AnthropicStreamEvent::ContentBlockDelta { index, delta } => {
-                                match delta {
-                                    ContentDelta::TextDelta { text } => {
-                                        current_text.push_str(&text);
-                                        yield StreamEvent::Text(text);
-                                    }
-                                    ContentDelta::ThinkingDelta { thinking } => {
-                                        yield StreamEvent::Thinking(thinking);
-                                    }
-                                    ContentDelta::InputJsonDelta { partial_json } => {
-                                        if index < tool_calls.len() {
-                                            tool_calls[index].arguments.push_str(&partial_json);
-                                            yield StreamEvent::ToolCallDelta {
+                    // Only process non-empty lines
+                    if !line.is_empty() {
+                        // Note: parse_sse_line takes &str, avoiding allocation
+                        if let Some(event) = Self::parse_sse_line(line) {
+                            match event {
+                                AnthropicStreamEvent::ContentBlockStart { index, content_block } => {
+                                    match content_block {
+                                        ContentBlock::Text { .. } => {}
+                                        ContentBlock::ToolUse { id, name, .. } => {
+                                            while tool_calls.len() <= index {
+                                                tool_calls.push(PartialToolCall::default());
+                                            }
+                                            tool_calls[index] = PartialToolCall {
+                                                id,
+                                                name: name.clone(),
+                                                arguments: String::with_capacity(256),
+                                            };
+                                            yield StreamEvent::ToolCallStart {
                                                 index,
-                                                arguments_delta: partial_json,
+                                                id: tool_calls[index].id.clone(),
+                                                name,
                                             };
                                         }
+                                        _ => {}
                                     }
                                 }
-                            }
-                            AnthropicStreamEvent::ContentBlockStop { index } => {
-                                // If this was a tool call, emit the complete tool call
-                                if index < tool_calls.len() {
-                                    let tc = &tool_calls[index];
-                                    let arguments = serde_json::from_str(&tc.arguments)
-                                        .unwrap_or(serde_json::Value::Null);
-                                    yield StreamEvent::ToolCall(ToolCall::new(
-                                        &tc.id,
-                                        &tc.name,
-                                        arguments,
-                                    ));
+                                AnthropicStreamEvent::ContentBlockDelta { index, delta } => {
+                                    match delta {
+                                        ContentDelta::TextDelta { text } => {
+                                            current_text.push_str(&text);
+                                            yield StreamEvent::Text(text);
+                                        }
+                                        ContentDelta::ThinkingDelta { thinking } => {
+                                            yield StreamEvent::Thinking(thinking);
+                                        }
+                                        ContentDelta::InputJsonDelta { partial_json } => {
+                                            if index < tool_calls.len() {
+                                                tool_calls[index].arguments.push_str(&partial_json);
+                                                yield StreamEvent::ToolCallDelta {
+                                                    index,
+                                                    arguments_delta: partial_json,
+                                                };
+                                            }
+                                        }
+                                    }
                                 }
-                            }
-                            AnthropicStreamEvent::MessageDelta { usage: msg_usage, .. } => {
-                                if let Some(u) = msg_usage {
-                                    usage.output_tokens = u.output_tokens;
+                                AnthropicStreamEvent::ContentBlockStop { index } => {
+                                    if index < tool_calls.len() {
+                                        let tc = &tool_calls[index];
+                                        let arguments = serde_json::from_str(&tc.arguments)
+                                            .unwrap_or(serde_json::Value::Null);
+                                        yield StreamEvent::ToolCall(ToolCall::new(
+                                            &tc.id,
+                                            &tc.name,
+                                            arguments,
+                                        ));
+                                    }
                                 }
-                            }
-                            AnthropicStreamEvent::MessageStart { message } => {
-                                if let Some(u) = message.usage {
-                                    usage.input_tokens = u.input_tokens;
-                                    usage.cache_read_tokens = u.cache_read_input_tokens.unwrap_or(0);
-                                    usage.cache_creation_tokens = u.cache_creation_input_tokens.unwrap_or(0);
+                                AnthropicStreamEvent::MessageDelta { usage: msg_usage, .. } => {
+                                    if let Some(u) = msg_usage {
+                                        usage.output_tokens = u.output_tokens;
+                                    }
                                 }
+                                AnthropicStreamEvent::MessageStart { message } => {
+                                    if let Some(u) = message.usage {
+                                        usage.input_tokens = u.input_tokens;
+                                        usage.cache_read_tokens = u.cache_read_input_tokens.unwrap_or(0);
+                                        usage.cache_creation_tokens = u.cache_creation_input_tokens.unwrap_or(0);
+                                    }
+                                }
+                                AnthropicStreamEvent::MessageStop => {
+                                    yield StreamEvent::Usage(usage.clone());
+                                    yield StreamEvent::Done;
+                                    return;
+                                }
+                                _ => {}
                             }
-                            AnthropicStreamEvent::MessageStop => {
-                                yield StreamEvent::Usage(usage.clone());
-                                yield StreamEvent::Done;
-                                return;
-                            }
-                            _ => {}
                         }
                     }
+
+                    // Efficient buffer drain (in-place)
+                    buffer.drain(..=newline_pos);
                 }
             }
-
-            // Stream ended without MessageStop
-            yield StreamEvent::Usage(usage);
-            yield StreamEvent::Done;
         })
     }
 

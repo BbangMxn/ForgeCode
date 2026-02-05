@@ -168,7 +168,8 @@ impl LocalExecutor {
     /// Create a new local executor
     pub fn new() -> Self {
         Self {
-            processes: Arc::new(RwLock::new(HashMap::new())),
+            // Pre-allocate for typical concurrent task count
+            processes: Arc::new(RwLock::new(HashMap::with_capacity(16))),
             log_manager: Arc::new(TaskLogManager::new()),
             config: LocalExecutorConfig::default(),
         }
@@ -177,7 +178,7 @@ impl LocalExecutor {
     /// Create with configuration
     pub fn with_config(config: LocalExecutorConfig) -> Self {
         Self {
-            processes: Arc::new(RwLock::new(HashMap::new())),
+            processes: Arc::new(RwLock::new(HashMap::with_capacity(16))),
             log_manager: Arc::new(TaskLogManager::new()),
             config,
         }
@@ -186,7 +187,7 @@ impl LocalExecutor {
     /// Create with custom log manager
     pub fn with_log_manager(log_manager: Arc<TaskLogManager>) -> Self {
         Self {
-            processes: Arc::new(RwLock::new(HashMap::new())),
+            processes: Arc::new(RwLock::new(HashMap::with_capacity(16))),
             log_manager,
             config: LocalExecutorConfig::default(),
         }
@@ -198,7 +199,7 @@ impl LocalExecutor {
         log_manager: Arc<TaskLogManager>,
     ) -> Self {
         Self {
-            processes: Arc::new(RwLock::new(HashMap::new())),
+            processes: Arc::new(RwLock::new(HashMap::with_capacity(16))),
             log_manager,
             config,
         }
@@ -474,6 +475,17 @@ impl Executor for LocalExecutor {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
+
+        // Inherit PATH and other important environment variables from parent process
+        // This ensures commands like `cargo`, `npm`, etc. are available
+        for (key, value) in std::env::vars() {
+            cmd.env(&key, &value);
+        }
+
+        // Override with task-specific environment variables
+        for (key, value) in &task.env {
+            cmd.env(key, value);
+        }
 
         debug!("Executing task {}: {}", task_id, task.command);
 

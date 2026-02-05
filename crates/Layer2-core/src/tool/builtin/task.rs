@@ -53,20 +53,28 @@ use tracing::info;
 // ============================================================================
 
 lazy_static::lazy_static! {
-    static ref GLOBAL_ORCHESTRATOR: Arc<RwLock<Option<TaskOrchestrator>>> = Arc::new(RwLock::new(None));
+    static ref GLOBAL_ORCHESTRATOR: Arc<tokio::sync::RwLock<Option<Arc<TaskOrchestrator>>>> =
+        Arc::new(tokio::sync::RwLock::new(None));
     static ref TASK_NAME_MAP: Arc<RwLock<HashMap<String, TaskId>>> = Arc::new(RwLock::new(HashMap::new()));
 }
 
 /// Orchestrator 초기화 (처음 사용 시 자동 호출)
 async fn get_orchestrator() -> Arc<TaskOrchestrator> {
+    // Read lock으로 먼저 확인
+    {
+        let guard = GLOBAL_ORCHESTRATOR.read().await;
+        if let Some(ref orch) = *guard {
+            return Arc::clone(orch);
+        }
+    }
+
+    // Write lock으로 초기화
     let mut guard = GLOBAL_ORCHESTRATOR.write().await;
     if guard.is_none() {
         let orchestrator = TaskOrchestrator::new(OrchestratorConfig::default()).await;
-        *guard = Some(orchestrator);
+        *guard = Some(Arc::new(orchestrator));
     }
-    // TaskOrchestrator를 Arc로 감싸서 반환 (실제로는 내부 참조)
-    // 여기서는 임시로 새로 생성 - 실제 구현에서는 싱글톤 패턴 개선 필요
-    Arc::new(TaskOrchestrator::new(OrchestratorConfig::default()).await)
+    Arc::clone(guard.as_ref().unwrap())
 }
 
 /// Task ID 조회 (이름 또는 ID)
@@ -117,7 +125,9 @@ impl Tool for TaskSpawnTool {
     fn meta(&self) -> ToolMeta {
         ToolMeta::new("task_spawn")
             .display_name("Task Spawn")
-            .description("Start a new task (command execution). Supports local, PTY (interactive), and container modes. Use PTY mode for long-running servers or interactive commands.")
+            .description("Start a LONG-RUNNING task (servers, watch processes). Returns task_id for task_wait/task_logs/task_stop. \
+                         ⚠️ For SIMPLE commands (ls, cargo --version, git status), use 'bash' tool instead - it's faster and simpler. \
+                         Use this tool ONLY when you need: (1) background servers, (2) watch commands, (3) processes you'll interact with later.")
             .category("task")
     }
 
@@ -137,7 +147,7 @@ impl Tool for TaskSpawnTool {
                 },
                 "name": {
                     "type": "string",
-                    "description": "Optional name for the task (for easier reference)"
+                    "description": "Optional friendly name (the returned task_id is what you must use for other task_* tools)"
                 },
                 "working_dir": {
                     "type": "string",
@@ -174,6 +184,15 @@ impl Tool for TaskSpawnTool {
         let mode = input["mode"].as_str().unwrap_or("local");
         let name = input["name"].as_str();
         let timeout_secs = input["timeout_secs"].as_u64().unwrap_or(300);
+
+        // 간단한 명령어 감지 - bash 도구 사용 권장
+        let simple_patterns = ["--version", "--help", "-v", "-h", "ls ", "ls\n", "pwd", "echo ", "cat ", "which ", "type "];
+        let is_simple = simple_patterns.iter().any(|p| command.contains(p) || command.ends_with("ls"));
+        
+        if is_simple && mode != "pty" {
+            // 간단한 명령어지만 일단 실행 (경고만 로그)
+            tracing::warn!("Simple command '{}' would be faster with 'bash' tool", command);
+        }
 
         // Execution mode 결정
         let execution_mode = match mode {
@@ -214,13 +233,12 @@ impl Tool for TaskSpawnTool {
 
         info!("Spawned task {} with command: {}", task_id, command);
 
-        Ok(ToolResult::success(json!({
-            "task_id": task_id.to_string(),
-            "name": name,
-            "command": command,
-            "mode": mode,
-            "status": "running"
-        }).to_string()))
+        // Return task_id prominently so LLM can use it
+        let task_id_str = task_id.to_string();
+        Ok(ToolResult::success(format!(
+            "Task started successfully.\n\n**TASK_ID: {}**\n\nUse this task_id value '{}' for task_wait, task_logs, task_stop, task_status.\n\nDetails: command='{}', mode='{}'",
+            task_id_str, task_id_str, command, mode
+        )))
     }
 }
 
@@ -252,7 +270,7 @@ impl Tool for TaskWaitTool {
     fn meta(&self) -> ToolMeta {
         ToolMeta::new("task_wait")
             .display_name("Task Wait")
-            .description("Wait for a task to meet a condition. Use 'output_contains' to wait for specific output (e.g., 'Listening on'), 'complete' to wait for task finish, or 'regex' for pattern matching.")
+            .description("Wait for a task to meet a condition. IMPORTANT: Use the task_id from task_spawn result, not the name.")
             .category("task")
     }
 
@@ -262,16 +280,16 @@ impl Tool for TaskWaitTool {
             "properties": {
                 "task_id": {
                     "type": "string",
-                    "description": "Task ID or name to wait for"
+                    "description": "REQUIRED. The task_id value returned from task_spawn (e.g., '4bf5ad02'). Do NOT use the name parameter."
                 },
                 "condition": {
                     "type": "string",
                     "enum": ["complete", "output_contains", "output_matches", "ready"],
-                    "description": "Wait condition type"
+                    "description": "Wait condition: 'complete' (task finished), 'output_contains' (wait for pattern in output - requires 'pattern'), 'output_matches' (regex match - requires 'pattern'), 'ready' (task signals ready)"
                 },
                 "pattern": {
                     "type": "string",
-                    "description": "Pattern to match (for output_contains/output_matches)"
+                    "description": "REQUIRED when condition is 'output_contains' or 'output_matches'. The text/regex pattern to match in task output. Example: 'Server ready' or 'Listening on port \\d+'"
                 },
                 "timeout_secs": {
                     "type": "integer",
@@ -388,7 +406,7 @@ impl Tool for TaskLogsTool {
     fn meta(&self) -> ToolMeta {
         ToolMeta::new("task_logs")
             .display_name("Task Logs")
-            .description("Get logs from a running or completed task. Use 'tail' to get last N lines, 'errors_only' to filter errors, or 'analyze' for LLM-friendly analysis.")
+            .description("Get logs from a task. IMPORTANT: Use the task_id from task_spawn result, not the name.")
             .category("task")
     }
 
@@ -398,24 +416,24 @@ impl Tool for TaskLogsTool {
             "properties": {
                 "task_id": {
                     "type": "string",
-                    "description": "Task ID or name"
+                    "description": "REQUIRED. The task_id value returned from task_spawn (e.g., '4bf5ad02'). Do NOT use the name parameter."
                 },
                 "tail": {
                     "type": "integer",
-                    "description": "Get last N lines (default: all)"
+                    "description": "Get last N lines of output (default: all lines). Example: 50"
                 },
                 "errors_only": {
                     "type": "boolean",
-                    "description": "Show only error lines",
+                    "description": "If true, show only error/stderr lines",
                     "default": false
                 },
                 "search": {
                     "type": "string",
-                    "description": "Search for specific text in logs"
+                    "description": "Filter logs to only lines containing this text"
                 },
                 "analyze": {
                     "type": "boolean",
-                    "description": "Return analysis report instead of raw logs",
+                    "description": "If true, return structured analysis report instead of raw logs",
                     "default": false
                 }
             },
@@ -527,7 +545,7 @@ impl Tool for TaskStopTool {
     fn meta(&self) -> ToolMeta {
         ToolMeta::new("task_stop")
             .display_name("Task Stop")
-            .description("Stop a running task. Use this to terminate servers, long-running processes, or cancel pending tasks.")
+            .description("Stop a running task. IMPORTANT: Use the task_id from task_spawn result, not the name.")
             .category("task")
     }
 
@@ -537,7 +555,7 @@ impl Tool for TaskStopTool {
             "properties": {
                 "task_id": {
                     "type": "string",
-                    "description": "Task ID or name to stop"
+                    "description": "REQUIRED. The task_id value returned from task_spawn (e.g., '4bf5ad02'). Do NOT use the name parameter."
                 },
                 "force": {
                     "type": "boolean",
@@ -610,7 +628,7 @@ impl Tool for TaskSendTool {
     fn meta(&self) -> ToolMeta {
         ToolMeta::new("task_send")
             .display_name("Task Send")
-            .description("Send input to a running PTY task. Use this to interact with interactive commands, answer prompts, or send keyboard input.")
+            .description("Send input to a PTY task. IMPORTANT: Use the task_id from task_spawn result, not the name.")
             .category("task")
     }
 
@@ -620,7 +638,7 @@ impl Tool for TaskSendTool {
             "properties": {
                 "task_id": {
                     "type": "string",
-                    "description": "Task ID or name"
+                    "description": "REQUIRED. The task_id value returned from task_spawn (e.g., '4bf5ad02'). Do NOT use the name parameter."
                 },
                 "input": {
                     "type": "string",
@@ -800,7 +818,7 @@ impl Tool for TaskStatusTool {
     fn meta(&self) -> ToolMeta {
         ToolMeta::new("task_status")
             .display_name("Task Status")
-            .description("Get detailed status of a specific task including state, logs summary, and errors.")
+            .description("Get status of a task. IMPORTANT: Use the task_id from task_spawn result, not the name.")
             .category("task")
     }
 
@@ -810,7 +828,7 @@ impl Tool for TaskStatusTool {
             "properties": {
                 "task_id": {
                     "type": "string",
-                    "description": "Task ID or name"
+                    "description": "REQUIRED. The task_id value returned from task_spawn (e.g., '4bf5ad02'). Do NOT use the name parameter."
                 }
             },
             "required": ["task_id"]

@@ -5,100 +5,87 @@
 //! - 새로운 AgentEvent 전체 처리
 //! - Permission Modal 통합
 //! - Context 압축 상태 표시
+//! - Claude Code 스타일 UI
 
-use crate::tui::components::{
-    ChatMessage, InputBox, MessageList, MessageRole, PermissionModalManager, ToolInfo, ToolStatus,
+use crate::tui::components::{ModelSwitcher, ModelSwitcherAction, PermissionModalManager};
+use crate::tui::widgets::{
+    AgentStatus, ChatMessage, ChatView, ChatViewState, Header, HeaderState, InputArea, InputState,
+    MessageRole, SpinnerState, StatusBar, StatusBarState, ToolBlock, ToolExecutionState,
 };
+use crate::tui::{current_theme, HelpOverlay, Theme};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use forge_agent::{Agent, AgentConfig, AgentContext, AgentEvent, MessageHistory, SteeringHandle};
+use forge_agent::{Agent, AgentContext, AgentEvent, MessageHistory, SteeringHandle};
 use forge_core::ToolRegistry;
 use forge_foundation::{PermissionService, ProviderConfig};
 use forge_provider::Gateway;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
-    text::{Line, Span},
-    widgets::{Block, Borders, Gauge, Paragraph},
     Frame,
 };
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
-/// Chat page state
+/// Chat page state - Claude Code 스타일 UI
 pub struct ChatPage {
-    /// Message list display
-    messages: MessageList,
+    // === 새 위젯 상태 ===
+    /// 헤더 상태
+    header: HeaderState,
+    /// 채팅 뷰 상태
+    chat: ChatViewState,
+    /// 입력 상태
+    input: InputState,
+    /// 상태 바 상태
+    status_bar: StatusBarState,
+    /// 스피너 상태
+    spinner: SpinnerState,
+    /// 테마
+    theme: Theme,
 
-    /// Input box
-    input: InputBox,
-
+    // === Agent 상태 ===
     /// Agent context
     ctx: Option<Arc<AgentContext>>,
-
     /// Message history for LLM
     history: MessageHistory,
-
     /// Session ID
     session_id: String,
-
     /// Whether agent is currently running
     running: bool,
-
     /// Agent is paused
     paused: bool,
-
     /// Steering handle for controlling the agent
     steering_handle: Option<SteeringHandle>,
 
-    /// Status text
-    status: String,
-
-    /// Token usage (input, output)
-    tokens: (u32, u32),
-
-    /// Current turn
-    current_turn: u32,
-
-    /// Context usage (0.0 - 1.0)
-    context_usage: f32,
-
-    /// Last compression info
-    last_compression: Option<(usize, usize)>, // (saved, total)
-
+    // === UI 상태 ===
     /// Permission modal manager
     permission_modal: PermissionModalManager,
-
     /// Show help overlay
     show_help: bool,
-
-    /// Provider name
-    provider_name: String,
-
-    /// Model name
-    model_name: String,
+    /// Model switcher component
+    model_switcher: ModelSwitcher,
 }
 
 impl ChatPage {
     /// Create a new chat page
     pub fn new() -> Self {
+        let mut header = HeaderState::new();
+        header.session_id = uuid::Uuid::new_v4().to_string()[..8].to_string();
+
         Self {
-            messages: MessageList::new(),
-            input: InputBox::new(),
+            header,
+            chat: ChatViewState::new(),
+            input: InputState::new(),
+            status_bar: StatusBarState::new(),
+            spinner: SpinnerState::new(),
+            theme: current_theme(),
             ctx: None,
             history: MessageHistory::new(),
             session_id: uuid::Uuid::new_v4().to_string(),
             running: false,
             paused: false,
             steering_handle: None,
-            status: "Ready".to_string(),
-            tokens: (0, 0),
-            current_turn: 0,
-            context_usage: 0.0,
-            last_compression: None,
             permission_modal: PermissionModalManager::new(),
             show_help: false,
-            provider_name: "Unknown".to_string(),
-            model_name: "Unknown".to_string(),
+            model_switcher: ModelSwitcher::new(),
         }
     }
 
@@ -109,9 +96,11 @@ impl ChatPage {
             Gateway::from_config(config).map_err(|e| format!("Failed to initialize LLM: {}", e))?;
 
         // Store provider info
-        self.provider_name = config.default.clone().unwrap_or_else(|| "anthropic".to_string());
-        if let Some(provider_config) = config.providers.get(&self.provider_name) {
-            self.model_name = provider_config.model.clone().unwrap_or_default();
+        let provider_name = config.default.clone().unwrap_or_else(|| "anthropic".to_string());
+        self.header.provider = provider_name.clone();
+
+        if let Some(provider_config) = config.providers.get(&provider_name) {
+            self.header.model = provider_config.model.clone().unwrap_or_default();
         }
 
         // Create tools
@@ -122,6 +111,7 @@ impl ChatPage {
 
         // Get working directory
         let working_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        self.header.cwd = working_dir.to_string_lossy().to_string();
 
         // Create context
         self.ctx = Some(Arc::new(AgentContext::new(
@@ -131,7 +121,8 @@ impl ChatPage {
             working_dir,
         )));
 
-        self.status = "Connected".to_string();
+        self.header.agent_status = AgentStatus::Ready;
+        self.status_bar.info("Connected");
 
         Ok(())
     }
@@ -144,6 +135,22 @@ impl ChatPage {
             return None;
         }
 
+        // Handle model switcher if visible
+        if self.model_switcher.is_visible() {
+            match self.model_switcher.handle_key(key.code) {
+                ModelSwitcherAction::None => {}
+                ModelSwitcherAction::ModelSelected(model_id) => {
+                    self.header.model = model_id.clone();
+                    self.chat.push(ChatMessage::system(format!(
+                        "Model changed to: {}",
+                        model_id
+                    )));
+                }
+                ModelSwitcherAction::Closed => {}
+            }
+            return None;
+        }
+
         // Handle help overlay
         if self.show_help {
             self.show_help = false;
@@ -152,115 +159,193 @@ impl ChatPage {
 
         // Global shortcuts
         match (key.modifiers, key.code) {
+            // Ctrl+C: Quit
+            (KeyModifiers::CONTROL, KeyCode::Char('c')) => {
+                return None; // Let app.rs handle quit
+            }
             // Ctrl+P: Pause/Resume
             (KeyModifiers::CONTROL, KeyCode::Char('p')) => {
                 if self.running {
                     return Some(ChatAction::TogglePause);
                 }
             }
-            // Ctrl+X: Stop agent
-            (KeyModifiers::CONTROL, KeyCode::Char('x')) => {
+            // Ctrl+X: Stop
+            (KeyModifiers::CONTROL, KeyCode::Char('x')) | (_, KeyCode::Esc) => {
                 if self.running {
                     return Some(ChatAction::StopAgent);
                 }
             }
-            // Ctrl+H or F1: Help
-            (KeyModifiers::CONTROL, KeyCode::Char('h')) | (_, KeyCode::F(1)) => {
-                self.show_help = true;
+            // Ctrl+M: Model switcher
+            (KeyModifiers::CONTROL, KeyCode::Char('m')) => {
+                if !self.running {
+                    self.model_switcher.show();
+                }
                 return None;
             }
-            // Ctrl+L: Clear messages
+            // Ctrl+L: Clear
             (KeyModifiers::CONTROL, KeyCode::Char('l')) => {
                 if !self.running {
-                    self.messages.clear();
-                    self.history.clear();
-                    self.tokens = (0, 0);
-                    self.current_turn = 0;
-                    self.context_usage = 0.0;
-                    return None;
+                    self.chat.clear();
+                    self.header.tokens = (0, 0);
+                    self.header.context_usage = 0.0;
+                    self.header.current_turn = 0;
+                    self.status_bar.info("Cleared");
                 }
+                return None;
             }
-            // Escape: Cancel current operation
-            (_, KeyCode::Esc) => {
-                if self.running {
-                    return Some(ChatAction::StopAgent);
-                }
-            }
-            // Page Up/Down for scrolling
+            // Page Up/Down: Scroll
             (_, KeyCode::PageUp) => {
-                for _ in 0..5 {
-                    self.messages.scroll_up();
-                }
+                self.chat.scroll_up(10);
                 return None;
             }
             (_, KeyCode::PageDown) => {
-                for _ in 0..5 {
-                    self.messages.scroll_down();
-                }
+                self.chat.scroll_down(10);
+                return None;
+            }
+            // ?: Help
+            (_, KeyCode::Char('?')) if !self.running => {
+                self.show_help = true;
                 return None;
             }
             _ => {}
         }
 
-        // Don't process input while agent is running
+        // If agent is running, ignore input keys
         if self.running {
             return None;
         }
 
         // Handle input
-        if self.input.handle_key(key) {
-            let content = self.input.take();
-            if !content.is_empty() {
-                // Check for slash commands
-                if content.starts_with('/') {
-                    return Some(ChatAction::SlashCommand(content));
+        match key.code {
+            KeyCode::Enter => {
+                let content = self.input.take(); // take() already adds to history
+                if !content.is_empty() {
+                    // Check slash command
+                    if content.starts_with('/') {
+                        return Some(ChatAction::SlashCommand(content));
+                    }
+                    return Some(ChatAction::SendMessage(content));
                 }
-                return Some(ChatAction::SendMessage(content));
             }
+            KeyCode::Backspace => {
+                self.input.backspace();
+            }
+            KeyCode::Delete => {
+                self.input.delete();
+            }
+            KeyCode::Left => {
+                if key.modifiers.contains(KeyModifiers::CONTROL) {
+                    self.input.move_word_left();
+                } else {
+                    self.input.move_left();
+                }
+            }
+            KeyCode::Right => {
+                if key.modifiers.contains(KeyModifiers::CONTROL) {
+                    self.input.move_word_right();
+                } else {
+                    self.input.move_right();
+                }
+            }
+            KeyCode::Home => {
+                self.input.move_home();
+            }
+            KeyCode::End => {
+                self.input.move_end();
+            }
+            KeyCode::Up => {
+                self.input.history_up();
+            }
+            KeyCode::Down => {
+                self.input.history_down();
+            }
+            KeyCode::Char(c) => {
+                self.input.insert(c);
+            }
+            _ => {}
         }
 
         None
     }
 
+    /// Handle slash commands
+    pub fn handle_slash_command(&mut self, cmd: &str) {
+        let parts: Vec<&str> = cmd.trim().split_whitespace().collect();
+        let command = parts.first().map(|s| s.to_lowercase()).unwrap_or_default();
+
+        match command.as_str() {
+            "/help" | "/?" => {
+                self.show_help = true;
+            }
+            "/clear" => {
+                self.chat.clear();
+                self.header.tokens = (0, 0);
+                self.header.context_usage = 0.0;
+                self.status_bar.info("Conversation cleared");
+            }
+            "/new" => {
+                self.chat.clear();
+                self.history = MessageHistory::new();
+                self.session_id = uuid::Uuid::new_v4().to_string();
+                self.header.session_id = self.session_id[..8].to_string();
+                self.header.tokens = (0, 0);
+                self.header.context_usage = 0.0;
+                self.header.current_turn = 0;
+                self.status_bar.success("New session started");
+            }
+            "/model" => {
+                self.model_switcher.show();
+            }
+            "/status" => {
+                let status = format!(
+                    "Provider: {} | Model: {} | Tokens: {}↓ {}↑ | Context: {:.0}%",
+                    self.header.provider,
+                    self.header.model,
+                    self.header.tokens.0,
+                    self.header.tokens.1,
+                    self.header.context_usage * 100.0
+                );
+                self.chat.push(ChatMessage::system(status));
+            }
+            _ => {
+                self.chat
+                    .push(ChatMessage::system(format!("Unknown command: {}", command)));
+            }
+        }
+    }
+
     /// Send a message to the agent
     pub async fn send_message(&mut self, content: String) -> mpsc::Receiver<AgentEvent> {
-        self.running = true;
-        self.paused = false;
-        self.status = "Thinking...".to_string();
-        self.current_turn = 0;
-
         // Add user message to display
-        self.messages.push(ChatMessage {
-            role: MessageRole::User,
-            content: content.clone(),
-            tool_info: None,
-        });
+        self.chat.push(ChatMessage::user(content.clone()));
+
+        // Add to history
+        self.history.add_user(content.clone());
+
+        // Set running state
+        self.running = true;
+        self.input.disable("Agent running...");
+        self.header.agent_status = AgentStatus::Thinking;
+        self.status_bar.set_running_mode();
 
         // Create channel for events
         let (tx, rx) = mpsc::channel(100);
 
-        // Clone what we need for the async task
+        // Clone context
         let ctx = self.ctx.clone();
         let session_id = self.session_id.clone();
         let mut history = self.history.clone();
+        let user_message = content.clone();
 
-        // Spawn agent task and get steering handle
-        let (steering_tx, mut steering_rx) = mpsc::channel::<SteeringHandle>(1);
+        // Create agent and get steering handle
+        if let Some(ref ctx) = ctx {
+            let agent = Agent::new(ctx.clone());
+            self.steering_handle = Some(agent.steering_handle());
 
-        tokio::spawn(async move {
-            if let Some(ctx) = ctx {
-                let agent = Agent::with_config(ctx, AgentConfig::default());
-
-                // Send steering handle back
-                let _ = steering_tx.send(agent.steering_handle()).await;
-
-                let _ = agent.run(&session_id, &mut history, &content, tx).await;
-            }
-        });
-
-        // Get steering handle
-        if let Some(handle) = steering_rx.recv().await {
-            self.steering_handle = Some(handle);
+            // Spawn agent task
+            tokio::spawn(async move {
+                let _ = agent.run(&session_id, &mut history, &user_message, tx).await;
+            });
         }
 
         rx
@@ -272,11 +357,13 @@ impl ChatPage {
             if self.paused {
                 let _ = handle.resume().await;
                 self.paused = false;
-                self.status = "Resumed".to_string();
+                self.header.agent_status = AgentStatus::Thinking;
+                self.status_bar.set_running_mode();
             } else {
                 let _ = handle.pause().await;
                 self.paused = true;
-                self.status = "Paused (Ctrl+P to resume)".to_string();
+                self.header.agent_status = AgentStatus::Paused;
+                self.status_bar.set_paused_mode();
             }
         }
     }
@@ -285,108 +372,41 @@ impl ChatPage {
     pub async fn stop_agent(&mut self) {
         if let Some(ref handle) = self.steering_handle {
             let _ = handle.stop("User requested stop").await;
-            self.running = false;
-            self.paused = false;
-            self.status = "Stopped".to_string();
         }
-    }
-
-    /// Handle slash command
-    pub fn handle_slash_command(&mut self, command: &str) -> Option<ChatAction> {
-        let parts: Vec<&str> = command.split_whitespace().collect();
-        let cmd = parts.first().map(|s| &s[1..]); // Remove leading /
-
-        match cmd {
-            Some("help") | Some("h") => {
-                self.show_help = true;
-                None
-            }
-            Some("clear") => {
-                self.messages.clear();
-                self.history.clear();
-                self.tokens = (0, 0);
-                self.current_turn = 0;
-                None
-            }
-            Some("new") => {
-                self.messages.clear();
-                self.history.clear();
-                self.tokens = (0, 0);
-                self.current_turn = 0;
-                self.session_id = uuid::Uuid::new_v4().to_string();
-                self.messages.push(ChatMessage {
-                    role: MessageRole::System,
-                    content: "Started new session".to_string(),
-                    tool_info: None,
-                });
-                None
-            }
-            Some("model") => {
-                // TODO: Open model switcher
-                self.messages.push(ChatMessage {
-                    role: MessageRole::System,
-                    content: format!(
-                        "Current model: {} ({})",
-                        self.model_name, self.provider_name
-                    ),
-                    tool_info: None,
-                });
-                None
-            }
-            Some("tokens") => {
-                self.messages.push(ChatMessage {
-                    role: MessageRole::System,
-                    content: format!(
-                        "Token usage: {} input, {} output, {} total",
-                        self.tokens.0,
-                        self.tokens.1,
-                        self.tokens.0 + self.tokens.1
-                    ),
-                    tool_info: None,
-                });
-                None
-            }
-            _ => {
-                self.messages.push(ChatMessage {
-                    role: MessageRole::System,
-                    content: format!("Unknown command: {}", command),
-                    tool_info: None,
-                });
-                None
-            }
-        }
+        self.running = false;
+        self.paused = false;
+        self.steering_handle = None;
+        self.input.enable();
+        self.header.agent_status = AgentStatus::Ready;
+        self.status_bar.set_normal_mode();
+        self.status_bar.warning("Agent stopped");
     }
 
     /// Handle agent event
     pub fn handle_agent_event(&mut self, event: AgentEvent) {
         match event {
             AgentEvent::Thinking => {
-                self.status = format!("Turn {} - Thinking...", self.current_turn + 1);
+                self.header.agent_status = AgentStatus::Thinking;
             }
             AgentEvent::Text(text) => {
                 // Append to last assistant message or create new one
-                if let Some(last) = self.messages.messages.last_mut() {
-                    if last.role == MessageRole::Assistant && last.tool_info.is_none() {
+                if let Some(last) = self.chat.messages.last_mut() {
+                    if last.role == MessageRole::Assistant && last.streaming {
                         last.content.push_str(&text);
                         return;
                     }
                 }
-                self.messages.push(ChatMessage {
-                    role: MessageRole::Assistant,
-                    content: text,
-                    tool_info: None,
-                });
+                // Create new streaming message
+                let mut msg = ChatMessage::assistant(text);
+                msg.streaming = true;
+                self.chat.push(msg);
             }
             AgentEvent::ToolStart { tool_name, .. } => {
-                self.status = format!("Running {}...", tool_name);
-                self.messages.push(ChatMessage {
-                    role: MessageRole::Tool,
-                    content: "".to_string(),
-                    tool_info: Some(ToolInfo {
-                        name: tool_name,
-                        status: ToolStatus::Running,
-                    }),
-                });
+                self.header.agent_status = AgentStatus::ToolRunning(tool_name.clone());
+
+                // Add tool block to last assistant message
+                let block = ToolBlock::new(&tool_name);
+                self.chat.add_tool_block(block);
             }
             AgentEvent::ToolComplete {
                 result,
@@ -394,283 +414,145 @@ impl ChatPage {
                 duration_ms,
                 ..
             } => {
-                // Update last tool message
-                if let Some(last) = self.messages.messages.last_mut() {
-                    if last.role == MessageRole::Tool {
-                        last.content = format!("{} ({}ms)", truncate(&result, 150), duration_ms);
-                        if let Some(ref mut info) = last.tool_info {
-                            info.status = if success {
-                                ToolStatus::Success
-                            } else {
-                                ToolStatus::Error
-                            };
-                        }
+                let state = if success {
+                    ToolExecutionState::Success { duration_ms }
+                } else {
+                    ToolExecutionState::Error {
+                        message: truncate(&result, 100),
                     }
-                }
+                };
+                self.chat.update_last_tool(state, Some(truncate(&result, 300)));
+                self.header.agent_status = AgentStatus::Thinking;
             }
             AgentEvent::TurnStart { turn } => {
-                self.current_turn = turn;
-                self.status = format!("Turn {}", turn);
+                self.header.current_turn = turn;
             }
-            AgentEvent::TurnComplete { turn } => {
-                self.status = format!("Turn {} complete", turn);
+            AgentEvent::TurnComplete { .. } => {
+                // Finish streaming on last message
+                if let Some(last) = self.chat.messages.last_mut() {
+                    last.streaming = false;
+                }
             }
             AgentEvent::Compressed {
                 tokens_before,
                 tokens_after,
                 tokens_saved,
             } => {
-                self.last_compression = Some((tokens_saved, tokens_before));
-                self.context_usage = tokens_after as f32 / 200_000.0; // Approximate
-                self.messages.push(ChatMessage {
-                    role: MessageRole::System,
-                    content: format!(
-                        "Context compressed: {} → {} tokens (saved {})",
-                        tokens_before, tokens_after, tokens_saved
-                    ),
-                    tool_info: None,
-                });
+                self.header.context_usage = tokens_after as f32 / 200_000.0;
+                self.chat.push(ChatMessage::system(format!(
+                    "Context compressed: {} → {} tokens (saved {})",
+                    tokens_before, tokens_after, tokens_saved
+                )));
             }
             AgentEvent::Paused => {
                 self.paused = true;
-                self.status = "Paused (Ctrl+P to resume)".to_string();
+                self.header.agent_status = AgentStatus::Paused;
+                self.status_bar.set_paused_mode();
             }
             AgentEvent::Resumed => {
                 self.paused = false;
-                self.status = "Resumed".to_string();
+                self.header.agent_status = AgentStatus::Thinking;
+                self.status_bar.set_running_mode();
             }
             AgentEvent::Stopped { reason } => {
                 self.running = false;
                 self.paused = false;
-                self.status = format!("Stopped: {}", reason);
+                self.input.enable();
+                self.header.agent_status = AgentStatus::Ready;
+                self.status_bar.set_normal_mode();
+                self.status_bar.warning(&format!("Stopped: {}", reason));
             }
             AgentEvent::Done { .. } => {
                 self.running = false;
                 self.paused = false;
                 self.steering_handle = None;
-                self.status = "Ready".to_string();
+                self.input.enable();
+                self.header.agent_status = AgentStatus::Ready;
+                self.status_bar.set_normal_mode();
+
+                // Finish streaming
+                if let Some(last) = self.chat.messages.last_mut() {
+                    last.streaming = false;
+                }
             }
             AgentEvent::Error(e) => {
                 self.running = false;
                 self.paused = false;
                 self.steering_handle = None;
-                self.status = format!("Error: {}", truncate(&e, 50));
-                self.messages.push(ChatMessage {
-                    role: MessageRole::System,
-                    content: format!("Error: {}", e),
-                    tool_info: None,
-                });
+                self.input.enable();
+                self.header.agent_status = AgentStatus::Error;
+                self.status_bar.set_normal_mode();
+                self.status_bar.error(&truncate(&e, 50));
+                self.chat
+                    .push(ChatMessage::system(format!("Error: {}", e)));
             }
             AgentEvent::Usage {
                 input_tokens,
                 output_tokens,
             } => {
-                self.tokens.0 += input_tokens;
-                self.tokens.1 += output_tokens;
-                // Update context usage estimate
-                self.context_usage = (self.tokens.0 as f32) / 200_000.0;
+                self.header.tokens.0 += input_tokens;
+                self.header.tokens.1 += output_tokens;
+                self.header.context_usage = (self.header.tokens.0 as f32) / 200_000.0;
             }
         }
     }
 
-    /// Render the chat page
+    /// Tick for animations
+    pub fn tick(&mut self) {
+        self.spinner.tick();
+        self.status_bar.check_timeout();
+    }
+
+    /// Render the chat page with new widgets
     pub fn render(&mut self, frame: &mut Frame, area: Rect) {
+        // Tick animations
+        self.tick();
+
+        // Layout: Header(2) + Chat(flex) + Input(3) + StatusBar(1)
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Min(5),    // Messages
-                Constraint::Length(3), // Input
-                Constraint::Length(1), // Status bar
+                Constraint::Length(2),  // Header
+                Constraint::Min(10),    // Chat
+                Constraint::Length(3),  // Input
+                Constraint::Length(1),  // Status bar
             ])
             .split(area);
 
-        // Render messages
-        self.messages.render(frame, chunks[0]);
+        // Render header
+        let header = Header::new(&self.header).with_theme(self.theme.clone());
+        frame.render_widget(header, chunks[0]);
 
-        // Render input (with pause indicator)
-        self.render_input(frame, chunks[1]);
+        // Render chat view
+        let chat = ChatView::new(&self.chat)
+            .with_theme(self.theme.clone())
+            .with_spinner_frame(self.spinner.frame);
+        frame.render_widget(chat, chunks[1]);
+
+        // Render input area
+        let input = InputArea::new(&self.input)
+            .with_theme(self.theme.clone())
+            .focused(!self.running);
+        frame.render_widget(input, chunks[2]);
 
         // Render status bar
-        self.render_status_bar(frame, chunks[2]);
+        let status_bar = StatusBar::new(&self.status_bar).with_theme(self.theme.clone());
+        frame.render_widget(status_bar, chunks[3]);
 
-        // Render permission modal if visible
+        // Set cursor position if not running
+        if !self.running && !self.show_help && !self.model_switcher.is_visible() {
+            let cursor_x = chunks[2].x + 3 + self.input.cursor as u16;
+            let cursor_y = chunks[2].y + 1;
+            frame.set_cursor_position((cursor_x.min(chunks[2].right() - 2), cursor_y));
+        }
+
+        // Render overlays
         self.permission_modal.render(frame, area);
+        self.model_switcher.render(frame, area);
 
-        // Render help overlay if visible
         if self.show_help {
-            self.render_help(frame, area);
+            frame.render_widget(HelpOverlay::new(), area);
         }
-    }
-
-    fn render_input(&self, frame: &mut Frame, area: Rect) {
-        let border_color = if self.running {
-            if self.paused {
-                Color::Yellow
-            } else {
-                Color::DarkGray
-            }
-        } else {
-            Color::Cyan
-        };
-
-        let title = if self.running {
-            if self.paused {
-                " PAUSED - Ctrl+P to resume "
-            } else {
-                " Agent running... "
-            }
-        } else {
-            " Input (Enter to send) "
-        };
-
-        let input = Paragraph::new(self.input.content())
-            .style(Style::default().fg(Color::White))
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(border_color))
-                    .title(title),
-            );
-
-        frame.render_widget(input, area);
-
-        // Show cursor if not running
-        if !self.running {
-            frame.set_cursor_position((area.x + self.input.content().len() as u16 + 1, area.y + 1));
-        }
-    }
-
-    fn render_status_bar(&self, frame: &mut Frame, area: Rect) {
-        // Split status bar into sections
-        let chunks = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Percentage(40), // Status
-                Constraint::Percentage(25), // Tokens
-                Constraint::Percentage(20), // Context gauge
-                Constraint::Percentage(15), // Session
-            ])
-            .split(area);
-
-        // Status text with color based on state
-        let status_color = if self.running {
-            if self.paused {
-                Color::Yellow
-            } else {
-                Color::Green
-            }
-        } else {
-            Color::White
-        };
-
-        let status = Paragraph::new(format!(" {}", self.status))
-            .style(Style::default().bg(Color::DarkGray).fg(status_color));
-        frame.render_widget(status, chunks[0]);
-
-        // Token count
-        let tokens = Paragraph::new(format!("{}↓ {}↑", self.tokens.0, self.tokens.1))
-            .style(Style::default().bg(Color::DarkGray).fg(Color::Cyan));
-        frame.render_widget(tokens, chunks[1]);
-
-        // Context usage gauge
-        let context_percent = (self.context_usage * 100.0).min(100.0) as u16;
-        let gauge_color = if context_percent > 90 {
-            Color::Red
-        } else if context_percent > 70 {
-            Color::Yellow
-        } else {
-            Color::Green
-        };
-
-        let gauge = Gauge::default()
-            .gauge_style(Style::default().fg(gauge_color).bg(Color::DarkGray))
-            .percent(context_percent)
-            .label(format!("{}%", context_percent));
-        frame.render_widget(gauge, chunks[2]);
-
-        // Session ID
-        let session = Paragraph::new(format!(" {}", &self.session_id[..8]))
-            .style(Style::default().bg(Color::DarkGray).fg(Color::Gray));
-        frame.render_widget(session, chunks[3]);
-    }
-
-    fn render_help(&self, frame: &mut Frame, area: Rect) {
-        // Center the help box
-        let width = 50.min(area.width - 4);
-        let height = 16.min(area.height - 4);
-        let x = (area.width - width) / 2;
-        let y = (area.height - height) / 2;
-        let help_area = Rect::new(x, y, width, height);
-
-        // Clear background
-        frame.render_widget(ratatui::widgets::Clear, help_area);
-
-        let help_text = vec![
-            Line::from(vec![Span::styled(
-                "Keyboard Shortcuts",
-                Style::default().add_modifier(Modifier::BOLD),
-            )]),
-            Line::from(""),
-            Line::from(vec![
-                Span::styled("Ctrl+C  ", Style::default().fg(Color::Cyan)),
-                Span::raw("Quit"),
-            ]),
-            Line::from(vec![
-                Span::styled("Ctrl+P  ", Style::default().fg(Color::Cyan)),
-                Span::raw("Pause/Resume agent"),
-            ]),
-            Line::from(vec![
-                Span::styled("Ctrl+X  ", Style::default().fg(Color::Cyan)),
-                Span::raw("Stop agent"),
-            ]),
-            Line::from(vec![
-                Span::styled("Ctrl+L  ", Style::default().fg(Color::Cyan)),
-                Span::raw("Clear messages"),
-            ]),
-            Line::from(vec![
-                Span::styled("Esc     ", Style::default().fg(Color::Cyan)),
-                Span::raw("Cancel/Close"),
-            ]),
-            Line::from(vec![
-                Span::styled("PgUp/Dn ", Style::default().fg(Color::Cyan)),
-                Span::raw("Scroll messages"),
-            ]),
-            Line::from(""),
-            Line::from(vec![Span::styled(
-                "Slash Commands",
-                Style::default().add_modifier(Modifier::BOLD),
-            )]),
-            Line::from(""),
-            Line::from(vec![
-                Span::styled("/help   ", Style::default().fg(Color::Yellow)),
-                Span::raw("Show this help"),
-            ]),
-            Line::from(vec![
-                Span::styled("/clear  ", Style::default().fg(Color::Yellow)),
-                Span::raw("Clear conversation"),
-            ]),
-            Line::from(vec![
-                Span::styled("/new    ", Style::default().fg(Color::Yellow)),
-                Span::raw("Start new session"),
-            ]),
-            Line::from(vec![
-                Span::styled("/model  ", Style::default().fg(Color::Yellow)),
-                Span::raw("Show current model"),
-            ]),
-        ];
-
-        let help = Paragraph::new(help_text)
-            .block(
-                Block::default()
-                    .title(" Help (press any key to close) ")
-                    .title_style(Style::default().fg(Color::White))
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Blue))
-                    .style(Style::default().bg(Color::Black)),
-            )
-            .alignment(ratatui::layout::Alignment::Left);
-
-        frame.render_widget(help, help_area);
     }
 }
 

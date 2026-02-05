@@ -69,14 +69,22 @@ impl OpenAiProvider {
             id: "openai".to_string(),
             display_name: "OpenAI".to_string(),
             models: vec![
+                // GPT-4.1 Series (2025 - 1M context)
+                Self::get_model_info("gpt-4.1"),
+                Self::get_model_info("gpt-4.1-mini"),
+                Self::get_model_info("gpt-4.1-nano"),
+                // o-series reasoning models
+                Self::get_model_info("o3"),
+                Self::get_model_info("o3-mini"),
+                Self::get_model_info("o4-mini"),
+                // GPT-4o Series (128K context)
                 Self::get_model_info("gpt-4o"),
                 Self::get_model_info("gpt-4o-mini"),
-                Self::get_model_info("gpt-4-turbo"),
-                Self::get_model_info("gpt-3.5-turbo"),
+                // Legacy
                 Self::get_model_info("o1"),
                 Self::get_model_info("o1-mini"),
             ],
-            default_model: "gpt-4o".to_string(),
+            default_model: "gpt-4.1".to_string(),
             config_keys: vec![
                 ConfigKey {
                     name: "api_key".to_string(),
@@ -99,6 +107,81 @@ impl OpenAiProvider {
 
     fn get_model_info(model_id: &str) -> ModelInfo {
         match model_id {
+            // GPT-4.1 Series (2025 - 1M context window)
+            "gpt-4.1" => ModelInfo {
+                id: "gpt-4.1".to_string(),
+                provider: "openai".to_string(),
+                display_name: "GPT-4.1".to_string(),
+                context_window: 1000000, // 1M tokens
+                max_output_tokens: 32768,
+                supports_tools: true,
+                supports_vision: true,
+                supports_thinking: false,
+                input_price_per_1m: 2.00,
+                output_price_per_1m: 8.00,
+            },
+            "gpt-4.1-mini" => ModelInfo {
+                id: "gpt-4.1-mini".to_string(),
+                provider: "openai".to_string(),
+                display_name: "GPT-4.1 Mini".to_string(),
+                context_window: 1000000, // 1M tokens
+                max_output_tokens: 32768,
+                supports_tools: true,
+                supports_vision: true,
+                supports_thinking: false,
+                input_price_per_1m: 0.40,
+                output_price_per_1m: 1.60,
+            },
+            "gpt-4.1-nano" => ModelInfo {
+                id: "gpt-4.1-nano".to_string(),
+                provider: "openai".to_string(),
+                display_name: "GPT-4.1 Nano".to_string(),
+                context_window: 1000000, // 1M tokens
+                max_output_tokens: 32768,
+                supports_tools: true,
+                supports_vision: true,
+                supports_thinking: false,
+                input_price_per_1m: 0.10,
+                output_price_per_1m: 0.40,
+            },
+            // o-series reasoning models (2025)
+            "o3" => ModelInfo {
+                id: "o3".to_string(),
+                provider: "openai".to_string(),
+                display_name: "o3".to_string(),
+                context_window: 200000,
+                max_output_tokens: 100000,
+                supports_tools: true,
+                supports_vision: true,
+                supports_thinking: true,
+                input_price_per_1m: 10.00,
+                output_price_per_1m: 40.00,
+            },
+            "o3-mini" => ModelInfo {
+                id: "o3-mini".to_string(),
+                provider: "openai".to_string(),
+                display_name: "o3-mini".to_string(),
+                context_window: 200000,
+                max_output_tokens: 65536,
+                supports_tools: true,
+                supports_vision: true,
+                supports_thinking: true,
+                input_price_per_1m: 1.10,
+                output_price_per_1m: 4.40,
+            },
+            "o4-mini" => ModelInfo {
+                id: "o4-mini".to_string(),
+                provider: "openai".to_string(),
+                display_name: "o4-mini".to_string(),
+                context_window: 200000,
+                max_output_tokens: 100000,
+                supports_tools: true,
+                supports_vision: true,
+                supports_thinking: true,
+                input_price_per_1m: 1.10,
+                output_price_per_1m: 4.40,
+            },
+            // GPT-4o Series (128K context)
             "gpt-4o" => ModelInfo {
                 id: "gpt-4o".to_string(),
                 provider: "openai".to_string(),
@@ -123,30 +206,7 @@ impl OpenAiProvider {
                 input_price_per_1m: 0.15,
                 output_price_per_1m: 0.60,
             },
-            "gpt-4-turbo" | "gpt-4-turbo-preview" => ModelInfo {
-                id: model_id.to_string(),
-                provider: "openai".to_string(),
-                display_name: "GPT-4 Turbo".to_string(),
-                context_window: 128000,
-                max_output_tokens: 4096,
-                supports_tools: true,
-                supports_vision: true,
-                supports_thinking: false,
-                input_price_per_1m: 10.00,
-                output_price_per_1m: 30.00,
-            },
-            "gpt-3.5-turbo" => ModelInfo {
-                id: "gpt-3.5-turbo".to_string(),
-                provider: "openai".to_string(),
-                display_name: "GPT-3.5 Turbo".to_string(),
-                context_window: 16385,
-                max_output_tokens: 4096,
-                supports_tools: true,
-                supports_vision: false,
-                supports_thinking: false,
-                input_price_per_1m: 0.50,
-                output_price_per_1m: 1.50,
-            },
+            // Legacy o1 series
             "o1" => ModelInfo {
                 id: "o1".to_string(),
                 provider: "openai".to_string(),

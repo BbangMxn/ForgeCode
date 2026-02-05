@@ -78,6 +78,128 @@ impl CompressorConfig {
         }
     }
 
+    // ========================================================================
+    // Builder Methods
+    // ========================================================================
+
+    /// Set max context tokens from model's context window
+    ///
+    /// # Example
+    /// ```ignore
+    /// let config = CompressorConfig::default()
+    ///     .with_context_window(provider.model().context_window);
+    /// ```
+    pub fn with_context_window(mut self, context_window: u32) -> Self {
+        self.max_context_tokens = context_window as usize;
+        self
+    }
+
+    /// Set compression threshold (0.0 ~ 1.0)
+    pub fn with_threshold(mut self, threshold: f32) -> Self {
+        self.threshold = threshold.clamp(0.0, 1.0);
+        self
+    }
+
+    /// Set target usage after compression (0.0 ~ 1.0)
+    pub fn with_target_usage(mut self, target: f32) -> Self {
+        self.target_usage_after_compress = target.clamp(0.0, 1.0);
+        self
+    }
+
+    /// Set number of recent messages to keep during compression
+    pub fn with_keep_recent(mut self, count: usize) -> Self {
+        self.keep_recent_messages = count;
+        self
+    }
+
+    // ========================================================================
+    // Model-specific Presets
+    // ========================================================================
+
+    /// Preset for models with small context (8K-16K tokens)
+    /// More aggressive compression to fit within limits
+    pub fn small_context() -> Self {
+        Self {
+            threshold: 0.85,
+            max_context_tokens: 8_000,
+            target_usage_after_compress: 0.4,
+            keep_recent_messages: 5,
+            preserve_system_prompt: true,
+            summarize_tool_results: true,
+            max_summary_tokens: 1000,
+        }
+    }
+
+    /// Preset for models with medium context (32K-64K tokens)
+    pub fn medium_context() -> Self {
+        Self {
+            threshold: 0.90,
+            max_context_tokens: 32_000,
+            target_usage_after_compress: 0.5,
+            keep_recent_messages: 8,
+            preserve_system_prompt: true,
+            summarize_tool_results: true,
+            max_summary_tokens: 2000,
+        }
+    }
+
+    /// Preset for models with large context (128K+ tokens)
+    pub fn large_context() -> Self {
+        Self {
+            threshold: 0.92,
+            max_context_tokens: 128_000,
+            target_usage_after_compress: 0.5,
+            keep_recent_messages: 10,
+            preserve_system_prompt: true,
+            summarize_tool_results: true,
+            max_summary_tokens: 4000,
+        }
+    }
+
+    /// Preset for models with extra large context (200K tokens)
+    /// Used by Claude 4.x and OpenAI o-series models
+    pub fn xl_context() -> Self {
+        Self {
+            threshold: 0.92,
+            max_context_tokens: 200_000,
+            target_usage_after_compress: 0.5,
+            keep_recent_messages: 15,
+            preserve_system_prompt: true,
+            summarize_tool_results: true,
+            max_summary_tokens: 6000,
+        }
+    }
+
+    /// Preset for models with million-token context (1M tokens)
+    /// Used by GPT-4.1, Gemini 2.x/3.x, and Claude Sonnet (beta)
+    pub fn million_context() -> Self {
+        Self {
+            threshold: 0.95, // Higher threshold - more room before compression
+            max_context_tokens: 1_000_000,
+            target_usage_after_compress: 0.6,
+            keep_recent_messages: 20,
+            preserve_system_prompt: true,
+            summarize_tool_results: true,
+            max_summary_tokens: 10000,
+        }
+    }
+
+    /// Auto-select preset based on context window size
+    pub fn for_context_window(context_window: u32) -> Self {
+        let config = if context_window < 16_000 {
+            Self::small_context()
+        } else if context_window < 64_000 {
+            Self::medium_context()
+        } else if context_window < 150_000 {
+            Self::large_context()
+        } else if context_window < 500_000 {
+            Self::xl_context()
+        } else {
+            Self::million_context()
+        };
+        config.with_context_window(context_window)
+    }
+
     /// 보수적 압축 설정
     pub fn conservative() -> Self {
         Self {
@@ -90,17 +212,51 @@ impl CompressorConfig {
             max_summary_tokens: 8000,
         }
     }
+}
 
-    /// 컨텍스트 크기 설정
-    pub fn with_max_tokens(mut self, tokens: usize) -> Self {
-        self.max_context_tokens = tokens;
-        self
+// ============================================================================
+// Token Usage Info
+// ============================================================================
+
+/// Current token usage information
+#[derive(Debug, Clone)]
+pub struct TokenUsageInfo {
+    /// Current token count
+    pub current_tokens: usize,
+
+    /// Maximum context window (from model)
+    pub max_tokens: usize,
+
+    /// Compression trigger threshold (tokens)
+    pub threshold_tokens: usize,
+
+    /// Usage percentage (0.0 ~ 1.0)
+    pub usage_percent: f32,
+
+    /// Whether compression is needed
+    pub needs_compression: bool,
+
+    /// Tokens until compression triggers
+    pub tokens_until_compression: usize,
+}
+
+impl TokenUsageInfo {
+    /// Get usage as percentage string (e.g., "75.2%")
+    pub fn usage_string(&self) -> String {
+        format!("{:.1}%", self.usage_percent * 100.0)
     }
 
-    /// 임계값 설정
-    pub fn with_threshold(mut self, threshold: f32) -> Self {
-        self.threshold = threshold.clamp(0.5, 0.99);
-        self
+    /// Get a simple status indicator
+    pub fn status(&self) -> &'static str {
+        if self.usage_percent < 0.5 {
+            "low"
+        } else if self.usage_percent < 0.8 {
+            "moderate"
+        } else if self.needs_compression {
+            "critical"
+        } else {
+            "high"
+        }
     }
 }
 
@@ -189,10 +345,50 @@ impl ContextCompressor {
         current_tokens > threshold_tokens
     }
 
-    /// 현재 사용률 계산
+    /// 현재 사용률 계산 (0.0 ~ 1.0+)
     pub fn current_usage(&self, history: &MessageHistory) -> f32 {
         let current_tokens = history.estimate_tokens();
         current_tokens as f32 / self.config.max_context_tokens as f32
+    }
+
+    /// Get detailed token usage information
+    ///
+    /// Returns comprehensive usage stats including current tokens, max tokens,
+    /// usage percentage, and whether compression is needed.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let info = compressor.get_usage_info(&history);
+    /// println!("Token usage: {}/{} ({})",
+    ///     info.current_tokens,
+    ///     info.max_tokens,
+    ///     info.usage_string()
+    /// );
+    /// if info.needs_compression {
+    ///     println!("Warning: compression will trigger soon!");
+    /// }
+    /// ```
+    pub fn get_usage_info(&self, history: &MessageHistory) -> TokenUsageInfo {
+        let current_tokens = history.estimate_tokens();
+        let max_tokens = self.config.max_context_tokens;
+        let threshold_tokens = (max_tokens as f32 * self.config.threshold) as usize;
+        let usage_percent = current_tokens as f32 / max_tokens as f32;
+        let needs_compression = current_tokens > threshold_tokens;
+        let tokens_until_compression = threshold_tokens.saturating_sub(current_tokens);
+
+        TokenUsageInfo {
+            current_tokens,
+            max_tokens,
+            threshold_tokens,
+            usage_percent,
+            needs_compression,
+            tokens_until_compression,
+        }
+    }
+
+    /// Update max context tokens (e.g., when model changes)
+    pub fn set_max_context_tokens(&mut self, tokens: usize) {
+        self.config.max_context_tokens = tokens;
     }
 
     /// 압축 수행
@@ -510,6 +706,64 @@ mod tests {
         let conservative = CompressorConfig::conservative();
         assert!(conservative.threshold > 0.9);
         assert!(conservative.keep_recent_messages > 10);
+    }
+
+    #[test]
+    fn test_context_window_presets() {
+        // Small context (8K - e.g., Gemma2)
+        let small = CompressorConfig::for_context_window(8192);
+        assert_eq!(small.max_context_tokens, 8192);
+        assert!(small.threshold <= 0.85);
+
+        // Medium context (32K - e.g., Mixtral)
+        let medium = CompressorConfig::for_context_window(32768);
+        assert_eq!(medium.max_context_tokens, 32768);
+
+        // Large context (128K - e.g., GPT-4o, Llama 3.3)
+        let large = CompressorConfig::for_context_window(128000);
+        assert_eq!(large.max_context_tokens, 128000);
+
+        // XL context (200K - e.g., Claude 4.x, o3)
+        let xl = CompressorConfig::for_context_window(200000);
+        assert_eq!(xl.max_context_tokens, 200000);
+
+        // Million context (1M - e.g., GPT-4.1, Gemini 3)
+        let million = CompressorConfig::for_context_window(1000000);
+        assert_eq!(million.max_context_tokens, 1000000);
+        assert!(million.threshold >= 0.95);
+    }
+
+    #[test]
+    fn test_token_usage_info() {
+        let config = CompressorConfig {
+            threshold: 0.9,
+            max_context_tokens: 10000,
+            ..Default::default()
+        };
+        let compressor = ContextCompressor::new(config);
+
+        let history = create_test_history(10);
+        let info = compressor.get_usage_info(&history);
+
+        assert!(info.current_tokens > 0);
+        assert_eq!(info.max_tokens, 10000);
+        assert_eq!(info.threshold_tokens, 9000); // 90% of 10000
+        assert!(info.usage_percent > 0.0);
+        assert!(!info.usage_string().is_empty());
+    }
+
+    #[test]
+    fn test_builder_methods() {
+        let config = CompressorConfig::default()
+            .with_context_window(500000)
+            .with_threshold(0.85)
+            .with_target_usage(0.4)
+            .with_keep_recent(25);
+
+        assert_eq!(config.max_context_tokens, 500000);
+        assert_eq!(config.threshold, 0.85);
+        assert_eq!(config.target_usage_after_compress, 0.4);
+        assert_eq!(config.keep_recent_messages, 25);
     }
 
     #[test]

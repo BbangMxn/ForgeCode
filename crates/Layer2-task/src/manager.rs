@@ -30,6 +30,32 @@ pub struct TaskManagerConfig {
 
     /// Enable log persistence
     pub persist_logs: bool,
+
+    /// Auto cleanup settings
+    pub auto_cleanup: AutoCleanupConfig,
+}
+
+/// Auto cleanup configuration for completed tasks
+#[derive(Debug, Clone)]
+pub struct AutoCleanupConfig {
+    /// Enable automatic cleanup of completed tasks
+    pub enabled: bool,
+
+    /// Cleanup interval in seconds
+    pub interval_secs: u64,
+
+    /// Number of completed tasks to keep per session
+    pub keep_per_session: usize,
+}
+
+impl Default for AutoCleanupConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            interval_secs: 300, // 5 minutes
+            keep_per_session: 50,
+        }
+    }
 }
 
 impl Default for TaskManagerConfig {
@@ -39,6 +65,7 @@ impl Default for TaskManagerConfig {
             default_mode: ExecutionMode::Local,
             max_log_entries: 10000,
             persist_logs: false,
+            auto_cleanup: AutoCleanupConfig::default(),
         }
     }
 }
@@ -57,6 +84,11 @@ pub struct TaskStatus {
 }
 
 /// Task Manager - handles task lifecycle and execution
+///
+/// Performance optimizations:
+/// - Uses atomic counter for running_count (no lock contention)
+/// - Batched queue operations to reduce lock acquisitions
+/// - Pre-allocated HashMap capacity
 #[derive(Clone)]
 pub struct TaskManager {
     /// All tasks by ID
@@ -65,8 +97,8 @@ pub struct TaskManager {
     /// Pending task queue
     queue: Arc<Mutex<VecDeque<TaskId>>>,
 
-    /// Currently running task count
-    running_count: Arc<Mutex<usize>>,
+    /// Currently running task count (atomic for lock-free reads)
+    running_count: Arc<std::sync::atomic::AtomicUsize>,
 
     /// Local executor
     local_executor: Arc<LocalExecutor>,
@@ -86,23 +118,59 @@ pub struct TaskManager {
 
 impl TaskManager {
     /// Create a new task manager
+    ///
+    /// If `auto_cleanup.enabled` is true, starts a background cleanup loop
+    /// that periodically removes old completed tasks to save memory.
     pub async fn new(config: TaskManagerConfig) -> Self {
         let log_manager =
             Arc::new(TaskLogManager::new().with_max_buffers(config.max_concurrent * 10));
 
-        Self {
-            tasks: Arc::new(RwLock::new(HashMap::new())),
-            queue: Arc::new(Mutex::new(VecDeque::new())),
-            running_count: Arc::new(Mutex::new(0)),
+        let auto_cleanup = config.auto_cleanup.clone();
+
+        let manager = Self {
+            // Pre-allocate HashMap with expected capacity
+            tasks: Arc::new(RwLock::new(HashMap::with_capacity(config.max_concurrent * 4))),
+            queue: Arc::new(Mutex::new(VecDeque::with_capacity(config.max_concurrent * 2))),
+            // Atomic counter for lock-free reads
+            running_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             local_executor: Arc::new(LocalExecutor::with_log_manager(Arc::clone(&log_manager))),
             pty_executor: Arc::new(PtyExecutor::with_log_manager(Arc::clone(&log_manager))),
             container_executor: Arc::new(ContainerExecutor::new().await),
             log_manager,
             config: Arc::new(config),
+        };
+
+        // Start auto cleanup if enabled
+        if auto_cleanup.enabled {
+            let manager_clone = manager.clone();
+            let interval = std::time::Duration::from_secs(auto_cleanup.interval_secs);
+            let keep = auto_cleanup.keep_per_session;
+
+            tokio::spawn(async move {
+                let mut interval_timer = tokio::time::interval(interval);
+                // Skip the first immediate tick
+                interval_timer.tick().await;
+
+                loop {
+                    interval_timer.tick().await;
+                    let cleaned = manager_clone.cleanup_completed(keep).await;
+                    manager_clone.cleanup_logs().await;
+
+                    if cleaned > 0 {
+                        debug!("Auto cleanup: removed {} completed tasks", cleaned);
+                    }
+                }
+            });
+            info!(
+                "Task auto-cleanup enabled: interval={}s, keep_per_session={}",
+                auto_cleanup.interval_secs, auto_cleanup.keep_per_session
+            );
         }
+
+        manager
     }
 
-    /// Create with default configuration
+    /// Create with default configuration (auto cleanup enabled)
     pub async fn default() -> Self {
         Self::new(TaskManagerConfig::default()).await
     }
@@ -140,19 +208,21 @@ impl TaskManager {
     }
 
     /// Process pending tasks in the queue
+    ///
+    /// Performance optimized:
+    /// - Lock-free running count check via atomic
+    /// - Single lock acquisition for queue pop
     async fn process_queue(&self) {
-        loop {
-            // Check if we can run more tasks
-            let can_run = {
-                let count = self.running_count.lock().await;
-                *count < self.config.max_concurrent
-            };
+        use std::sync::atomic::Ordering;
 
-            if !can_run {
+        loop {
+            // Lock-free check: can we run more tasks?
+            let current = self.running_count.load(Ordering::Acquire);
+            if current >= self.config.max_concurrent {
                 break;
             }
 
-            // Get next task from queue
+            // Get next task from queue (single lock)
             let task_id = {
                 let mut queue = self.queue.lock().await;
                 queue.pop_front()
@@ -169,8 +239,14 @@ impl TaskManager {
     }
 
     /// Execute a specific task (inner implementation without recursion)
+    ///
+    /// Performance optimized:
+    /// - Atomic increment for running count (no lock)
+    /// - Single write lock for task state update
     async fn execute_task_inner(&self, task_id: TaskId) {
-        // Update task state to running
+        use std::sync::atomic::Ordering;
+
+        // Update task state to running (single lock acquisition)
         let task = {
             let mut tasks = self.tasks.write().await;
             if let Some(task) = tasks.get_mut(&task_id) {
@@ -181,18 +257,38 @@ impl TaskManager {
             }
         };
 
-        // Increment running count
-        {
-            let mut count = self.running_count.lock().await;
-            *count += 1;
-        }
+        // Atomic increment - no lock needed
+        self.running_count.fetch_add(1, Ordering::AcqRel);
 
         info!("Executing task {}: {}", task_id, task.tool_name);
 
-        // Select executor
+        // For PTY mode, use background execution (returns immediately)
+        if matches!(task.execution_mode, ExecutionMode::Pty) {
+            let result = self.pty_executor.spawn_background(&task).await;
+
+            // Update task state based on spawn result
+            {
+                let mut tasks = self.tasks.write().await;
+                if let Some(t) = tasks.get_mut(&task_id) {
+                    match result {
+                        Ok(_) => {
+                            // Task is running in background, keep state as Running
+                            info!("PTY task {} spawned in background", task_id);
+                        }
+                        Err(e) => {
+                            t.fail(e.to_string());
+                            // Atomic decrement on failure
+                            self.running_count.fetch_sub(1, Ordering::AcqRel);
+                        }
+                    }
+                }
+            }
+            return;
+        }
+
+        // Select executor for non-PTY modes
         let executor: Arc<dyn Executor> = match &task.execution_mode {
             ExecutionMode::Local => self.local_executor.clone(),
-            ExecutionMode::Pty => self.pty_executor.clone(),
             ExecutionMode::Container { .. } => {
                 if self.container_executor.is_available() {
                     self.container_executor.clone()
@@ -201,9 +297,10 @@ impl TaskManager {
                     self.local_executor.clone()
                 }
             }
+            ExecutionMode::Pty => unreachable!(), // Handled above
         };
 
-        // Execute
+        // Execute synchronously
         let result = executor.execute(&task).await;
 
         // Update task state
@@ -218,12 +315,14 @@ impl TaskManager {
             }
         }
 
-        // Decrement running count
-        {
-            let mut count = self.running_count.lock().await;
-            *count = count.saturating_sub(1);
-        }
+        // Atomic decrement - no lock needed
+        self.running_count.fetch_sub(1, Ordering::AcqRel);
         // Note: Next task will be picked up by the loop in process_queue
+    }
+
+    /// Get the PTY executor for direct access (for wait operations)
+    pub fn pty_executor(&self) -> Arc<PtyExecutor> {
+        Arc::clone(&self.pty_executor)
     }
 
     /// Execute a specific task (public API that also triggers queue processing)
@@ -372,9 +471,10 @@ impl TaskManager {
         Ok(())
     }
 
-    /// Get count of running tasks
-    pub async fn running_count(&self) -> usize {
-        *self.running_count.lock().await
+    /// Get count of running tasks (lock-free)
+    pub fn running_count(&self) -> usize {
+        use std::sync::atomic::Ordering;
+        self.running_count.load(Ordering::Acquire)
     }
 
     /// Get count of pending tasks
@@ -580,8 +680,9 @@ impl TaskManager {
 
     /// 리소스 통계 조회
     pub async fn resource_stats(&self) -> ResourceStats {
+        use std::sync::atomic::Ordering;
         let tasks = self.tasks.read().await;
-        let running = self.running_count.lock().await;
+        let running = self.running_count.load(Ordering::Acquire);
         let pending = self.queue.lock().await.len();
 
         let mut completed = 0;
@@ -597,7 +698,7 @@ impl TaskManager {
 
         ResourceStats {
             total_tasks: tasks.len(),
-            running: *running,
+            running,
             pending,
             completed,
             failed,
@@ -659,7 +760,7 @@ mod tests {
     #[tokio::test]
     async fn test_task_manager_creation() {
         let manager = TaskManager::default().await;
-        assert_eq!(manager.running_count().await, 0);
+        assert_eq!(manager.running_count(), 0);
         assert_eq!(manager.pending_count().await, 0);
     }
 

@@ -1,0 +1,14 @@
+C:\Users\jixso\Desktop\zed\ForgeCode\examples\test-project\target\debug\deps\serde-1276d5f7fd7507dc.d: C:\Users\jixso\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\lib.rs C:\Users\jixso\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\integer128.rs C:\Users\jixso\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\mod.rs C:\Users\jixso\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\de.rs C:\Users\jixso\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\ser.rs C:\Users\jixso\Desktop\zed\ForgeCode\examples\test-project\target\debug\build\serde-291d5c27960f80df\out/private.rs
+
+C:\Users\jixso\Desktop\zed\ForgeCode\examples\test-project\target\debug\deps\libserde-1276d5f7fd7507dc.rlib: C:\Users\jixso\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\lib.rs C:\Users\jixso\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\integer128.rs C:\Users\jixso\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\mod.rs C:\Users\jixso\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\de.rs C:\Users\jixso\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\ser.rs C:\Users\jixso\Desktop\zed\ForgeCode\examples\test-project\target\debug\build\serde-291d5c27960f80df\out/private.rs
+
+C:\Users\jixso\Desktop\zed\ForgeCode\examples\test-project\target\debug\deps\libserde-1276d5f7fd7507dc.rmeta: C:\Users\jixso\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\lib.rs C:\Users\jixso\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\integer128.rs C:\Users\jixso\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\mod.rs C:\Users\jixso\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\de.rs C:\Users\jixso\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\ser.rs C:\Users\jixso\Desktop\zed\ForgeCode\examples\test-project\target\debug\build\serde-291d5c27960f80df\out/private.rs
+
+C:\Users\jixso\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\lib.rs:
+C:\Users\jixso\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\integer128.rs:
+C:\Users\jixso\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\mod.rs:
+C:\Users\jixso\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\de.rs:
+C:\Users\jixso\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\ser.rs:
+C:\Users\jixso\Desktop\zed\ForgeCode\examples\test-project\target\debug\build\serde-291d5c27960f80df\out/private.rs:
+
+# env-dep:OUT_DIR=C:\\Users\\jixso\\Desktop\\zed\\ForgeCode\\examples\\test-project\\target\\debug\\build\\serde-291d5c27960f80df\\out

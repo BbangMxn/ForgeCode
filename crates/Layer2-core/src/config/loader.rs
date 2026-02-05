@@ -1,12 +1,12 @@
 //! Configuration Loader
 //!
-//! Claude Code 호환 설정 로더
+//! ForgeCode 전용 설정 로더 (`.forgecode` 폴더만 지원)
 //!
 //! ## 검색 우선순위
 //!
-//! 1. User-level: `~/.claude/settings.json`
-//! 2. Project-level: `.claude/settings.json`
-//! 3. Local (gitignored): `.claude/settings.local.json`
+//! 1. User-level: `~/.forgecode/settings.json`
+//! 2. Project-level: `.forgecode/settings.json`
+//! 3. Local (gitignored): `.forgecode/settings.local.json`
 //!
 //! 각 레벨의 설정이 이전 레벨을 오버라이드합니다.
 
@@ -14,6 +14,9 @@ use super::types::ForgeConfig;
 use forge_foundation::Result;
 use std::path::{Path, PathBuf};
 use tracing::{debug, info, warn};
+
+/// 설정 폴더 이름 (통일)
+pub const CONFIG_DIR_NAME: &str = ".forgecode";
 
 // ============================================================================
 // ConfigLoader - 설정 로더
@@ -43,42 +46,26 @@ impl ConfigLoader {
 
         // 1. User-level (가장 낮은 우선순위)
         if let Some(home) = dirs::home_dir() {
-            // Claude Code 호환
-            paths.push(ConfigPath {
-                path: home.join(".claude/settings.json"),
-                priority: 10,
-                description: "User settings (Claude)",
-            });
             // ForgeCode 전용
             paths.push(ConfigPath {
-                path: home.join(".forgecode/settings.json"),
-                priority: 11,
-                description: "User settings (Forge)",
+                path: home.join(CONFIG_DIR_NAME).join("settings.json"),
+                priority: 10,
+                description: "User settings",
             });
         }
 
         // 2. Project-level
         paths.push(ConfigPath {
-            path: working_dir.join(".claude/settings.json"),
+            path: working_dir.join(CONFIG_DIR_NAME).join("settings.json"),
             priority: 20,
-            description: "Project settings (Claude)",
-        });
-        paths.push(ConfigPath {
-            path: working_dir.join(".forgecode/settings.json"),
-            priority: 21,
-            description: "Project settings (Forge)",
+            description: "Project settings",
         });
 
         // 3. Local (gitignored, 가장 높은 우선순위)
         paths.push(ConfigPath {
-            path: working_dir.join(".claude/settings.local.json"),
+            path: working_dir.join(CONFIG_DIR_NAME).join("settings.local.json"),
             priority: 30,
-            description: "Local settings (Claude)",
-        });
-        paths.push(ConfigPath {
-            path: working_dir.join(".forgecode/settings.local.json"),
-            priority: 31,
-            description: "Local settings (Forge)",
+            description: "Local settings",
         });
 
         // 우선순위 순으로 정렬
@@ -437,15 +424,15 @@ mod tests {
     #[test]
     fn test_loader_load_all() {
         let dir = tempdir().unwrap();
-        let claude_dir = dir.path().join(".claude");
-        fs::create_dir_all(&claude_dir).unwrap();
+        let forgecode_dir = dir.path().join(CONFIG_DIR_NAME);
+        fs::create_dir_all(&forgecode_dir).unwrap();
 
         // 기본 설정
-        let settings_file = claude_dir.join("settings.json");
+        let settings_file = forgecode_dir.join("settings.json");
         fs::write(&settings_file, r#"{"model": "base-model"}"#).unwrap();
 
         // 로컬 오버라이드
-        let local_file = claude_dir.join("settings.local.json");
+        let local_file = forgecode_dir.join("settings.local.json");
         fs::write(&local_file, r#"{"model": "local-model", "streaming": false}"#).unwrap();
 
         let loader = ConfigLoader::new(dir.path());
@@ -459,10 +446,10 @@ mod tests {
     #[test]
     fn test_existing_files() {
         let dir = tempdir().unwrap();
-        let claude_dir = dir.path().join(".claude");
-        fs::create_dir_all(&claude_dir).unwrap();
+        let forgecode_dir = dir.path().join(CONFIG_DIR_NAME);
+        fs::create_dir_all(&forgecode_dir).unwrap();
 
-        let settings_file = claude_dir.join("settings.json");
+        let settings_file = forgecode_dir.join("settings.json");
         fs::write(&settings_file, "{}").unwrap();
 
         let loader = ConfigLoader::new(dir.path());

@@ -1,285 +1,185 @@
-//! Error Recovery System
+//! Error recovery mechanisms for agent execution
 //!
-//! Provides intelligent error recovery strategies for tool execution failures.
-//! Enables the agent to automatically retry, use fallbacks, or ask for help.
+//! Provides intelligent error handling and recovery strategies:
+//! - File not found → search for similar files
+//! - Permission denied → request permission
+//! - Timeout → retry with extended timeout
+//! - Rate limit → wait and retry
 
 use async_trait::async_trait;
-use forge_foundation::{Error, Result};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 use tracing::{debug, info, warn};
 
-/// Types of errors that can occur during tool execution
-#[derive(Debug, Clone)]
-pub enum ToolError {
-    /// File not found
+/// Error types that can be recovered from
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum RecoverableError {
+    /// File or path not found
     FileNotFound { path: String },
-
     /// Permission denied
-    PermissionDenied { tool: String, action: String },
-
-    /// Command failed
-    CommandFailed {
-        command: String,
-        exit_code: i32,
-        stderr: String,
-    },
-
+    PermissionDenied { resource: String },
+    /// Timeout occurred
+    Timeout { operation: String },
+    /// Rate limit exceeded
+    RateLimited { retry_after: Option<Duration> },
     /// Network error
-    NetworkError { url: String, message: String },
-
-    /// Timeout
-    Timeout { tool: String, timeout_ms: u64 },
-
+    NetworkError { message: String },
     /// Invalid input
-    InvalidInput { tool: String, message: String },
-
-    /// Resource not found
-    ResourceNotFound {
-        resource_type: String,
-        identifier: String,
-    },
-
-    /// Edit conflict (old_string not found)
-    EditConflict { path: String, old_string: String },
-
-    /// Rate limit
-    RateLimited { retry_after_secs: Option<u64> },
-
-    /// Unknown error
-    Unknown { message: String },
+    InvalidInput { message: String },
+    /// Tool execution failed
+    ToolFailed { tool: String, message: String },
+    /// Parse error
+    ParseError { message: String },
 }
 
-impl ToolError {
-    /// Parse error from tool result
-    pub fn from_error_string(tool_name: &str, error: &str) -> Self {
-        let error_lower = error.to_lowercase();
+impl RecoverableError {
+    /// Create from tool error message
+    pub fn from_error_message(tool: &str, message: &str) -> Option<Self> {
+        let msg = message.to_lowercase();
 
-        // File not found patterns
-        if error_lower.contains("no such file")
-            || error_lower.contains("file not found")
-            || error_lower.contains("does not exist")
-        {
-            // Try to extract path
-            if let Some(path) = Self::extract_path(error) {
-                return Self::FileNotFound { path };
-            }
+        if msg.contains("not found") || msg.contains("no such file") {
+            // Extract path from message
+            let path = Self::extract_path(message).unwrap_or_default();
+            return Some(Self::FileNotFound { path });
         }
 
-        // Permission denied
-        if error_lower.contains("permission denied") || error_lower.contains("access denied") {
-            return Self::PermissionDenied {
-                tool: tool_name.to_string(),
-                action: error.to_string(),
-            };
+        if msg.contains("permission denied") || msg.contains("access denied") {
+            return Some(Self::PermissionDenied {
+                resource: Self::extract_path(message).unwrap_or_default(),
+            });
         }
 
-        // Edit conflict
-        if error_lower.contains("could not find") && error_lower.contains("in file") {
-            if let Some(path) = Self::extract_path(error) {
-                return Self::EditConflict {
-                    path,
-                    old_string: Self::extract_quoted(error).unwrap_or_default(),
-                };
-            }
+        if msg.contains("timeout") || msg.contains("timed out") {
+            return Some(Self::Timeout {
+                operation: tool.to_string(),
+            });
         }
 
-        // Timeout
-        if error_lower.contains("timeout") || error_lower.contains("timed out") {
-            return Self::Timeout {
-                tool: tool_name.to_string(),
-                timeout_ms: 0,
-            };
+        if msg.contains("rate limit") || msg.contains("too many requests") {
+            return Some(Self::RateLimited { retry_after: None });
         }
 
-        // Network errors
-        if error_lower.contains("network")
-            || error_lower.contains("connection")
-            || error_lower.contains("dns")
-        {
-            return Self::NetworkError {
-                url: Self::extract_url(error).unwrap_or_default(),
-                message: error.to_string(),
-            };
+        if msg.contains("connection") || msg.contains("network") {
+            return Some(Self::NetworkError {
+                message: message.to_string(),
+            });
         }
 
-        // Rate limiting
-        if error_lower.contains("rate limit") || error_lower.contains("too many requests") {
-            return Self::RateLimited {
-                retry_after_secs: Self::extract_retry_after(error),
-            };
-        }
-
-        // Default to unknown
-        Self::Unknown {
-            message: error.to_string(),
-        }
-    }
-
-    /// Extract file path from error message
-    fn extract_path(error: &str) -> Option<String> {
-        // Look for common path patterns
-        let patterns = [
-            r#"["']([^"']+)["']"#, // Quoted paths
-            r"`([^`]+)`",          // Backtick paths
-            r"path[:\s]+(\S+)",    // "path: /foo/bar"
-        ];
-
-        for pattern in patterns {
-            if let Ok(re) = regex::Regex::new(pattern) {
-                if let Some(caps) = re.captures(error) {
-                    if let Some(m) = caps.get(1) {
-                        let path = m.as_str();
-                        if path.contains('/') || path.contains('\\') {
-                            return Some(path.to_string());
-                        }
-                    }
-                }
-            }
-        }
         None
     }
 
-    /// Extract quoted string from error
-    fn extract_quoted(error: &str) -> Option<String> {
-        if let Ok(re) = regex::Regex::new(r#"["']([^"']{1,100})["']"#) {
-            if let Some(caps) = re.captures(error) {
-                return caps.get(1).map(|m| m.as_str().to_string());
+    fn extract_path(message: &str) -> Option<String> {
+        // Simple heuristic: look for quoted strings or paths
+        if let Some(start) = message.find('\'') {
+            if let Some(end) = message[start + 1..].find('\'') {
+                return Some(message[start + 1..start + 1 + end].to_string());
+            }
+        }
+        if let Some(start) = message.find('"') {
+            if let Some(end) = message[start + 1..].find('"') {
+                return Some(message[start + 1..start + 1 + end].to_string());
+            }
+        }
+        // Look for path-like strings
+        for word in message.split_whitespace() {
+            if word.contains('/') || word.contains('\\') {
+                return Some(word.trim_matches(|c| c == '\'' || c == '"' || c == ':').to_string());
             }
         }
         None
-    }
-
-    /// Extract URL from error
-    fn extract_url(error: &str) -> Option<String> {
-        if let Ok(re) = regex::Regex::new(r"https?://[^\s]+") {
-            if let Some(m) = re.find(error) {
-                return Some(m.as_str().to_string());
-            }
-        }
-        None
-    }
-
-    /// Extract retry-after seconds
-    fn extract_retry_after(error: &str) -> Option<u64> {
-        if let Ok(re) = regex::Regex::new(r"(\d+)\s*(?:seconds?|secs?)") {
-            if let Some(caps) = re.captures(error) {
-                if let Some(m) = caps.get(1) {
-                    return m.as_str().parse().ok();
-                }
-            }
-        }
-        None
-    }
-
-    /// Get error category for logging
-    pub fn category(&self) -> &'static str {
-        match self {
-            Self::FileNotFound { .. } => "file_not_found",
-            Self::PermissionDenied { .. } => "permission_denied",
-            Self::CommandFailed { .. } => "command_failed",
-            Self::NetworkError { .. } => "network_error",
-            Self::Timeout { .. } => "timeout",
-            Self::InvalidInput { .. } => "invalid_input",
-            Self::ResourceNotFound { .. } => "resource_not_found",
-            Self::EditConflict { .. } => "edit_conflict",
-            Self::RateLimited { .. } => "rate_limited",
-            Self::Unknown { .. } => "unknown",
-        }
     }
 }
 
-/// Action to take after error recovery analysis
-#[derive(Debug, Clone)]
+/// Action to take for recovery
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum RecoveryAction {
-    /// Retry with modified input
+    /// Retry the same operation
     Retry {
-        modified_input: Value,
-        reason: String,
+        /// Modified input parameters
+        modified_input: Option<Value>,
+        /// Delay before retry
+        delay: Option<Duration>,
     },
-
-    /// Use a different tool
+    /// Use a fallback tool
     UseFallback {
+        /// Fallback tool name
         tool: String,
+        /// Input for fallback tool
         input: Value,
-        reason: String,
     },
-
     /// Ask user for help
-    AskUser { question: String, context: String },
-
-    /// Wait and retry
-    WaitAndRetry { delay_ms: u64, reason: String },
-
-    /// Give up with explanation
-    GiveUp {
-        reason: String,
+    AskUser {
+        /// Question to ask
+        question: String,
+        /// Suggestions
         suggestions: Vec<String>,
     },
+    /// Skip this operation
+    Skip {
+        /// Reason for skipping
+        reason: String,
+    },
+    /// Give up
+    GiveUp {
+        /// Reason for giving up
+        reason: String,
+    },
 }
 
-/// Strategy for recovering from errors
+/// Recovery strategy trait
 #[async_trait]
 pub trait RecoveryStrategy: Send + Sync {
-    /// Name of this strategy
+    /// Get strategy name
     fn name(&self) -> &str;
 
     /// Check if this strategy can handle the error
-    fn can_handle(&self, error: &ToolError) -> bool;
+    fn can_handle(&self, error: &RecoverableError) -> bool;
 
     /// Attempt recovery
     async fn recover(
         &self,
-        tool_name: &str,
-        input: &Value,
-        error: &ToolError,
+        error: &RecoverableError,
         context: &RecoveryContext,
-    ) -> Result<RecoveryAction>;
-
-    /// Priority (higher = tried first)
-    fn priority(&self) -> u8 {
-        50
-    }
+    ) -> RecoveryAction;
 }
 
-/// Context available to recovery strategies
+/// Context for recovery operations
+#[derive(Debug, Clone)]
 pub struct RecoveryContext {
-    /// Working directory
-    pub working_dir: String,
-
-    /// Available tools
-    pub available_tools: Vec<String>,
-
-    /// Previous attempts for this operation
-    pub attempt_count: usize,
-
-    /// Maximum attempts allowed
-    pub max_attempts: usize,
-
-    /// Cached glob results for file search
-    pub file_cache: HashMap<String, Vec<String>>,
+    /// Current working directory
+    pub cwd: String,
+    /// Original tool call
+    pub tool_name: String,
+    /// Original input
+    pub original_input: Value,
+    /// Retry count so far
+    pub retry_count: u32,
+    /// Max retries allowed
+    pub max_retries: u32,
+    /// Available files (for suggestions)
+    pub available_files: Vec<String>,
 }
 
-impl RecoveryContext {
-    pub fn new(working_dir: &str, available_tools: Vec<String>) -> Self {
+impl Default for RecoveryContext {
+    fn default() -> Self {
         Self {
-            working_dir: working_dir.to_string(),
-            available_tools,
-            attempt_count: 0,
-            max_attempts: 3,
-            file_cache: HashMap::new(),
+            cwd: ".".to_string(),
+            tool_name: String::new(),
+            original_input: Value::Null,
+            retry_count: 0,
+            max_retries: 3,
+            available_files: Vec::new(),
         }
     }
 }
 
 /// Error recovery manager
 pub struct ErrorRecovery {
-    /// Registered strategies
     strategies: Vec<Box<dyn RecoveryStrategy>>,
-
-    /// Maximum retry attempts per error
-    max_retries: usize,
+    max_retries: u32,
 }
 
 impl ErrorRecovery {
@@ -291,110 +191,55 @@ impl ErrorRecovery {
         };
 
         // Register default strategies
-        recovery.register(Box::new(FileNotFoundRecovery));
-        recovery.register(Box::new(EditConflictRecovery));
-        recovery.register(Box::new(RateLimitRecovery));
-        recovery.register(Box::new(TimeoutRecovery));
-        recovery.register(Box::new(PermissionDeniedRecovery));
+        recovery.add_strategy(Box::new(FileNotFoundRecovery::new()));
+        recovery.add_strategy(Box::new(TimeoutRecovery::new()));
+        recovery.add_strategy(Box::new(RateLimitRecovery::new()));
+        recovery.add_strategy(Box::new(NetworkErrorRecovery::new()));
 
         recovery
     }
 
-    /// Register a recovery strategy
-    pub fn register(&mut self, strategy: Box<dyn RecoveryStrategy>) {
+    /// Add a recovery strategy
+    pub fn add_strategy(&mut self, strategy: Box<dyn RecoveryStrategy>) {
         self.strategies.push(strategy);
-        // Sort by priority (highest first)
-        self.strategies
-            .sort_by(|a, b| b.priority().cmp(&a.priority()));
     }
 
-    /// Set maximum retries
-    pub fn with_max_retries(mut self, max: usize) -> Self {
+    /// Set max retries
+    pub fn with_max_retries(mut self, max: u32) -> Self {
         self.max_retries = max;
         self
     }
 
-    /// Attempt to recover from an error
+    /// Handle an error
     pub async fn handle_error(
         &self,
-        tool_name: &str,
-        input: &Value,
-        error_message: &str,
-        context: &mut RecoveryContext,
+        error: &RecoverableError,
+        context: &RecoveryContext,
     ) -> RecoveryAction {
-        // Parse the error
-        let error = ToolError::from_error_string(tool_name, error_message);
-
-        info!(
-            "Handling {} error for tool '{}': {:?}",
-            error.category(),
-            tool_name,
-            error
-        );
-
-        // Check attempt count
-        if context.attempt_count >= context.max_attempts {
+        // Check retry limit
+        if context.retry_count >= self.max_retries {
             return RecoveryAction::GiveUp {
-                reason: format!("Maximum retry attempts ({}) exceeded", context.max_attempts),
-                suggestions: vec![
-                    "Check the error message for details".to_string(),
-                    "Try a different approach".to_string(),
-                ],
+                reason: format!("Max retries ({}) exceeded", self.max_retries),
             };
         }
 
-        // Find a strategy that can handle this error
+        // Try each strategy
         for strategy in &self.strategies {
-            if strategy.can_handle(&error) {
-                debug!("Trying recovery strategy: {}", strategy.name());
-
-                match strategy.recover(tool_name, input, &error, context).await {
-                    Ok(action) => {
-                        info!(
-                            "Recovery strategy '{}' suggested: {:?}",
-                            strategy.name(),
-                            action
-                        );
-                        context.attempt_count += 1;
-                        return action;
-                    }
-                    Err(e) => {
-                        warn!("Recovery strategy '{}' failed: {}", strategy.name(), e);
-                        continue;
-                    }
-                }
+            if strategy.can_handle(error) {
+                debug!("Using recovery strategy: {}", strategy.name());
+                return strategy.recover(error, context).await;
             }
         }
 
-        // No strategy could handle this
+        // No strategy found
         RecoveryAction::GiveUp {
-            reason: format!("No recovery strategy available for: {}", error_message),
-            suggestions: self.generate_suggestions(&error),
+            reason: "No recovery strategy available".to_string(),
         }
     }
 
-    /// Generate helpful suggestions based on error type
-    fn generate_suggestions(&self, error: &ToolError) -> Vec<String> {
-        match error {
-            ToolError::FileNotFound { path } => vec![
-                format!("Check if '{}' exists", path),
-                "Use glob to search for similar files".to_string(),
-                "Verify the working directory".to_string(),
-            ],
-            ToolError::PermissionDenied { .. } => vec![
-                "Check file permissions".to_string(),
-                "Request elevated permissions".to_string(),
-            ],
-            ToolError::EditConflict { .. } => vec![
-                "Re-read the file to get current content".to_string(),
-                "Use a larger context for matching".to_string(),
-            ],
-            ToolError::NetworkError { .. } => vec![
-                "Check network connectivity".to_string(),
-                "Verify the URL is correct".to_string(),
-            ],
-            _ => vec!["Check the error details".to_string()],
-        }
+    /// Create RecoverableError from tool error
+    pub fn classify_error(&self, tool: &str, message: &str) -> Option<RecoverableError> {
+        RecoverableError::from_error_message(tool, message)
     }
 }
 
@@ -404,12 +249,78 @@ impl Default for ErrorRecovery {
     }
 }
 
-// ============================================================================
-// Built-in Recovery Strategies
-// ============================================================================
+// ============== Built-in Recovery Strategies ==============
 
-/// Recovery for file not found errors
-pub struct FileNotFoundRecovery;
+/// Recovery strategy for file not found errors
+pub struct FileNotFoundRecovery {
+    /// Maximum Levenshtein distance for suggestions
+    max_distance: usize,
+}
+
+impl FileNotFoundRecovery {
+    pub fn new() -> Self {
+        Self { max_distance: 3 }
+    }
+
+    fn find_similar_files(&self, target: &str, available: &[String]) -> Vec<String> {
+        let target_name = std::path::Path::new(target)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(target);
+
+        let mut matches: Vec<(String, usize)> = available
+            .iter()
+            .filter_map(|file| {
+                let file_name = std::path::Path::new(file)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or(file);
+
+                let distance = Self::levenshtein(target_name, file_name);
+                if distance <= self.max_distance {
+                    Some((file.clone(), distance))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        matches.sort_by_key(|(_, d)| *d);
+        matches.into_iter().take(5).map(|(f, _)| f).collect()
+    }
+
+    fn levenshtein(a: &str, b: &str) -> usize {
+        let a_len = a.chars().count();
+        let b_len = b.chars().count();
+
+        if a_len == 0 {
+            return b_len;
+        }
+        if b_len == 0 {
+            return a_len;
+        }
+
+        let mut matrix = vec![vec![0usize; b_len + 1]; a_len + 1];
+
+        for i in 0..=a_len {
+            matrix[i][0] = i;
+        }
+        for j in 0..=b_len {
+            matrix[0][j] = j;
+        }
+
+        for (i, ca) in a.chars().enumerate() {
+            for (j, cb) in b.chars().enumerate() {
+                let cost = if ca == cb { 0 } else { 1 };
+                matrix[i + 1][j + 1] = (matrix[i][j + 1] + 1)
+                    .min(matrix[i + 1][j] + 1)
+                    .min(matrix[i][j] + cost);
+            }
+        }
+
+        matrix[a_len][b_len]
+    }
+}
 
 #[async_trait]
 impl RecoveryStrategy for FileNotFoundRecovery {
@@ -417,173 +328,80 @@ impl RecoveryStrategy for FileNotFoundRecovery {
         "file_not_found"
     }
 
-    fn can_handle(&self, error: &ToolError) -> bool {
-        matches!(error, ToolError::FileNotFound { .. })
-    }
-
-    fn priority(&self) -> u8 {
-        80
+    fn can_handle(&self, error: &RecoverableError) -> bool {
+        matches!(error, RecoverableError::FileNotFound { .. })
     }
 
     async fn recover(
         &self,
-        tool_name: &str,
-        input: &Value,
-        error: &ToolError,
+        error: &RecoverableError,
         context: &RecoveryContext,
-    ) -> Result<RecoveryAction> {
-        let ToolError::FileNotFound { path } = error else {
-            return Err(Error::InvalidInput("Not a FileNotFound error".to_string()));
-        };
+    ) -> RecoveryAction {
+        if let RecoverableError::FileNotFound { path } = error {
+            // Find similar files
+            let suggestions = self.find_similar_files(path, &context.available_files);
 
-        // Extract filename for search
-        let filename = std::path::Path::new(path)
-            .file_name()
-            .and_then(|f| f.to_str())
-            .unwrap_or(path);
+            if suggestions.len() == 1 {
+                // Auto-correct if only one match
+                let new_path = &suggestions[0];
+                info!("Auto-correcting path: {} -> {}", path, new_path);
 
-        // Suggest using glob to find similar files
-        if context.available_tools.contains(&"glob".to_string()) {
-            return Ok(RecoveryAction::UseFallback {
+                let mut new_input = context.original_input.clone();
+                if let Some(obj) = new_input.as_object_mut() {
+                    // Update path field
+                    if obj.contains_key("path") {
+                        obj.insert("path".to_string(), json!(new_path));
+                    } else if obj.contains_key("file_path") {
+                        obj.insert("file_path".to_string(), json!(new_path));
+                    }
+                }
+
+                return RecoveryAction::Retry {
+                    modified_input: Some(new_input),
+                    delay: None,
+                };
+            } else if !suggestions.is_empty() {
+                // Ask user to choose
+                return RecoveryAction::AskUser {
+                    question: format!(
+                        "File '{}' not found. Did you mean one of these?",
+                        path
+                    ),
+                    suggestions,
+                };
+            }
+
+            // Try glob search
+            return RecoveryAction::UseFallback {
                 tool: "glob".to_string(),
                 input: json!({
-                    "pattern": format!("**/*{}*", filename)
+                    "pattern": format!("**/*{}*", 
+                        std::path::Path::new(path)
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or("*"))
                 }),
-                reason: format!("File '{}' not found, searching for similar files", path),
-            });
+            };
         }
 
-        // If we have a cached result, suggest the closest match
-        if let Some(similar_files) = context.file_cache.get(filename) {
-            if let Some(closest) = similar_files.first() {
-                let mut new_input = input.clone();
-                if let Some(obj) = new_input.as_object_mut() {
-                    obj.insert("path".to_string(), json!(closest));
-                    obj.insert("file_path".to_string(), json!(closest));
-                }
-                return Ok(RecoveryAction::Retry {
-                    modified_input: new_input,
-                    reason: format!("Trying similar file: {}", closest),
-                });
-            }
+        RecoveryAction::GiveUp {
+            reason: "Not a file not found error".to_string(),
         }
-
-        Ok(RecoveryAction::AskUser {
-            question: format!("File '{}' not found. What file did you mean?", path),
-            context: format!("The {} tool couldn't find the specified file.", tool_name),
-        })
     }
 }
 
-/// Recovery for edit conflicts
-pub struct EditConflictRecovery;
-
-#[async_trait]
-impl RecoveryStrategy for EditConflictRecovery {
-    fn name(&self) -> &str {
-        "edit_conflict"
-    }
-
-    fn can_handle(&self, error: &ToolError) -> bool {
-        matches!(error, ToolError::EditConflict { .. })
-    }
-
-    fn priority(&self) -> u8 {
-        85
-    }
-
-    async fn recover(
-        &self,
-        _tool_name: &str,
-        input: &Value,
-        error: &ToolError,
-        context: &RecoveryContext,
-    ) -> Result<RecoveryAction> {
-        let ToolError::EditConflict { path, old_string } = error else {
-            return Err(Error::InvalidInput("Not an EditConflict error".to_string()));
-        };
-
-        // First, suggest re-reading the file
-        if context.attempt_count == 0 && context.available_tools.contains(&"read".to_string()) {
-            return Ok(RecoveryAction::UseFallback {
-                tool: "read".to_string(),
-                input: json!({ "file_path": path }),
-                reason: format!(
-                    "Could not find '{}...' in file. Re-reading to get current content.",
-                    &old_string[..old_string.len().min(30)]
-                ),
-            });
-        }
-
-        // Suggest trying with normalized whitespace
-        if context.attempt_count == 1 {
-            let normalized = old_string
-                .lines()
-                .map(|l| l.trim())
-                .collect::<Vec<_>>()
-                .join("\n");
-
-            if normalized != *old_string {
-                let mut new_input = input.clone();
-                if let Some(obj) = new_input.as_object_mut() {
-                    obj.insert("old_string".to_string(), json!(normalized));
-                }
-                return Ok(RecoveryAction::Retry {
-                    modified_input: new_input,
-                    reason: "Trying with normalized whitespace".to_string(),
-                });
-            }
-        }
-
-        Ok(RecoveryAction::AskUser {
-            question: "The text to replace was not found in the file. Please check the file content and provide the exact text to replace.".to_string(),
-            context: format!("File: {}\nSearched for: {}...", path, &old_string[..old_string.len().min(50)]),
-        })
-    }
+/// Recovery strategy for timeout errors
+pub struct TimeoutRecovery {
+    timeout_multiplier: f64,
 }
 
-/// Recovery for rate limiting
-pub struct RateLimitRecovery;
-
-#[async_trait]
-impl RecoveryStrategy for RateLimitRecovery {
-    fn name(&self) -> &str {
-        "rate_limit"
-    }
-
-    fn can_handle(&self, error: &ToolError) -> bool {
-        matches!(error, ToolError::RateLimited { .. })
-    }
-
-    fn priority(&self) -> u8 {
-        90
-    }
-
-    async fn recover(
-        &self,
-        _tool_name: &str,
-        _input: &Value,
-        error: &ToolError,
-        _context: &RecoveryContext,
-    ) -> Result<RecoveryAction> {
-        let ToolError::RateLimited { retry_after_secs } = error else {
-            return Err(Error::InvalidInput("Not a RateLimited error".to_string()));
-        };
-
-        let delay = retry_after_secs.unwrap_or(30) * 1000;
-
-        Ok(RecoveryAction::WaitAndRetry {
-            delay_ms: delay,
-            reason: format!(
-                "Rate limited. Waiting {} seconds before retry.",
-                delay / 1000
-            ),
-        })
+impl TimeoutRecovery {
+    pub fn new() -> Self {
+        Self {
+            timeout_multiplier: 2.0,
+        }
     }
 }
-
-/// Recovery for timeouts
-pub struct TimeoutRecovery;
 
 #[async_trait]
 impl RecoveryStrategy for TimeoutRecovery {
@@ -591,90 +409,118 @@ impl RecoveryStrategy for TimeoutRecovery {
         "timeout"
     }
 
-    fn can_handle(&self, error: &ToolError) -> bool {
-        matches!(error, ToolError::Timeout { .. })
-    }
-
-    fn priority(&self) -> u8 {
-        60
+    fn can_handle(&self, error: &RecoverableError) -> bool {
+        matches!(error, RecoverableError::Timeout { .. })
     }
 
     async fn recover(
         &self,
-        tool_name: &str,
-        input: &Value,
-        _error: &ToolError,
+        error: &RecoverableError,
         context: &RecoveryContext,
-    ) -> Result<RecoveryAction> {
-        // For bash commands, suggest breaking into smaller parts
-        if tool_name == "bash" {
-            if let Some(command) = input.get("command").and_then(|v| v.as_str()) {
-                if command.contains("&&") || command.contains(";") {
-                    return Ok(RecoveryAction::AskUser {
-                        question:
-                            "Command timed out. Would you like to break it into smaller parts?"
-                                .to_string(),
-                        context: format!("Command: {}", command),
-                    });
+    ) -> RecoveryAction {
+        if context.retry_count < 2 {
+            // Retry with longer timeout
+            let mut new_input = context.original_input.clone();
+            if let Some(obj) = new_input.as_object_mut() {
+                if let Some(timeout) = obj.get("timeout").and_then(|v| v.as_u64()) {
+                    let new_timeout = (timeout as f64 * self.timeout_multiplier) as u64;
+                    obj.insert("timeout".to_string(), json!(new_timeout));
                 }
             }
-        }
 
-        if context.attempt_count < 2 {
-            // Retry once with same input
-            Ok(RecoveryAction::Retry {
-                modified_input: input.clone(),
-                reason: "Timeout occurred, retrying...".to_string(),
-            })
+            RecoveryAction::Retry {
+                modified_input: Some(new_input),
+                delay: Some(Duration::from_secs(1)),
+            }
         } else {
-            Ok(RecoveryAction::GiveUp {
-                reason: "Operation timed out multiple times".to_string(),
-                suggestions: vec![
-                    "Try a simpler operation".to_string(),
-                    "Check if the target resource is responsive".to_string(),
-                ],
-            })
+            RecoveryAction::GiveUp {
+                reason: "Operation timed out after multiple retries".to_string(),
+            }
         }
     }
 }
 
-/// Recovery for permission denied
-pub struct PermissionDeniedRecovery;
+/// Recovery strategy for rate limit errors
+pub struct RateLimitRecovery;
+
+impl RateLimitRecovery {
+    pub fn new() -> Self {
+        Self
+    }
+}
 
 #[async_trait]
-impl RecoveryStrategy for PermissionDeniedRecovery {
+impl RecoveryStrategy for RateLimitRecovery {
     fn name(&self) -> &str {
-        "permission_denied"
+        "rate_limit"
     }
 
-    fn can_handle(&self, error: &ToolError) -> bool {
-        matches!(error, ToolError::PermissionDenied { .. })
-    }
-
-    fn priority(&self) -> u8 {
-        70
+    fn can_handle(&self, error: &RecoverableError) -> bool {
+        matches!(error, RecoverableError::RateLimited { .. })
     }
 
     async fn recover(
         &self,
-        _tool_name: &str,
-        _input: &Value,
-        error: &ToolError,
-        _context: &RecoveryContext,
-    ) -> Result<RecoveryAction> {
-        let ToolError::PermissionDenied { tool, action } = error else {
-            return Err(Error::InvalidInput(
-                "Not a PermissionDenied error".to_string(),
-            ));
+        error: &RecoverableError,
+        context: &RecoveryContext,
+    ) -> RecoveryAction {
+        let delay = if let RecoverableError::RateLimited { retry_after } = error {
+            retry_after.unwrap_or(Duration::from_secs(5))
+        } else {
+            Duration::from_secs(5)
         };
 
-        Ok(RecoveryAction::AskUser {
-            question: format!(
-                "Permission denied for '{}'. Would you like to grant permission?",
-                tool
-            ),
-            context: format!("Action: {}", action),
-        })
+        // Exponential backoff
+        let actual_delay = Duration::from_secs_f64(
+            delay.as_secs_f64() * (1.5f64.powi(context.retry_count as i32)),
+        );
+
+        info!("Rate limited, waiting {:?} before retry", actual_delay);
+
+        RecoveryAction::Retry {
+            modified_input: None,
+            delay: Some(actual_delay),
+        }
+    }
+}
+
+/// Recovery strategy for network errors
+pub struct NetworkErrorRecovery;
+
+impl NetworkErrorRecovery {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+#[async_trait]
+impl RecoveryStrategy for NetworkErrorRecovery {
+    fn name(&self) -> &str {
+        "network_error"
+    }
+
+    fn can_handle(&self, error: &RecoverableError) -> bool {
+        matches!(error, RecoverableError::NetworkError { .. })
+    }
+
+    async fn recover(
+        &self,
+        error: &RecoverableError,
+        context: &RecoveryContext,
+    ) -> RecoveryAction {
+        if context.retry_count < 3 {
+            // Simple retry with backoff
+            let delay = Duration::from_secs((context.retry_count + 1) as u64 * 2);
+
+            RecoveryAction::Retry {
+                modified_input: None,
+                delay: Some(delay),
+            }
+        } else {
+            RecoveryAction::GiveUp {
+                reason: "Network error persists after retries".to_string(),
+            }
+        }
     }
 }
 
@@ -683,61 +529,45 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_error_parsing() {
-        let error =
-            ToolError::from_error_string("read", "No such file or directory: '/foo/bar.txt'");
-        assert!(matches!(error, ToolError::FileNotFound { .. }));
+    fn test_error_classification() {
+        let error = RecoverableError::from_error_message(
+            "read",
+            "Error: File not found: '/path/to/file.txt'",
+        );
+        assert!(matches!(error, Some(RecoverableError::FileNotFound { .. })));
 
-        let error = ToolError::from_error_string("bash", "Permission denied");
-        assert!(matches!(error, ToolError::PermissionDenied { .. }));
-
-        let error = ToolError::from_error_string("edit", "Could not find 'foo' in file");
-        assert!(matches!(error, ToolError::EditConflict { .. }));
+        let error = RecoverableError::from_error_message(
+            "bash",
+            "Permission denied: /etc/passwd",
+        );
+        assert!(matches!(error, Some(RecoverableError::PermissionDenied { .. })));
     }
 
     #[test]
-    fn test_error_category() {
-        let error = ToolError::FileNotFound {
-            path: "/foo".to_string(),
-        };
-        assert_eq!(error.category(), "file_not_found");
-
-        let error = ToolError::RateLimited {
-            retry_after_secs: Some(30),
-        };
-        assert_eq!(error.category(), "rate_limited");
+    fn test_levenshtein() {
+        assert_eq!(FileNotFoundRecovery::levenshtein("test", "test"), 0);
+        assert_eq!(FileNotFoundRecovery::levenshtein("test", "tests"), 1);
+        assert_eq!(FileNotFoundRecovery::levenshtein("test", "best"), 1);
     }
 
     #[tokio::test]
-    async fn test_recovery_manager() {
-        let recovery = ErrorRecovery::new();
-        let mut context =
-            RecoveryContext::new("/tmp", vec!["glob".to_string(), "read".to_string()]);
+    async fn test_file_not_found_recovery() {
+        let recovery = FileNotFoundRecovery::new();
+        let context = RecoveryContext {
+            available_files: vec![
+                "src/main.rs".to_string(),
+                "src/lib.rs".to_string(),
+            ],
+            original_input: json!({"path": "src/mian.rs"}),
+            ..Default::default()
+        };
 
-        let action = recovery
-            .handle_error(
-                "read",
-                &json!({"file_path": "/nonexistent.txt"}),
-                "No such file or directory: '/nonexistent.txt'",
-                &mut context,
-            )
-            .await;
+        let error = RecoverableError::FileNotFound {
+            path: "src/mian.rs".to_string(),
+        };
 
-        // Should suggest using glob to find similar files
-        assert!(matches!(action, RecoveryAction::UseFallback { tool, .. } if tool == "glob"));
-    }
-
-    #[tokio::test]
-    async fn test_max_attempts() {
-        let recovery = ErrorRecovery::new();
-        let mut context = RecoveryContext::new("/tmp", vec![]);
-        context.attempt_count = 10;
-        context.max_attempts = 3;
-
-        let action = recovery
-            .handle_error("read", &json!({}), "Some error", &mut context)
-            .await;
-
-        assert!(matches!(action, RecoveryAction::GiveUp { .. }));
+        let action = recovery.recover(&error, &context).await;
+        // Should suggest main.rs
+        assert!(matches!(action, RecoveryAction::Retry { .. }));
     }
 }

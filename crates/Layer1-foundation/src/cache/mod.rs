@@ -117,6 +117,6 @@ pub use response::{
 pub use manager::{CacheManager, CacheManagerStats};
 
 pub use util::{
-    compute_hash, hash_file_content, hash_file_content_fast, hash_json, CompositeKey, LruCache,
-    LruCacheStats, TtlLruCache,
+    compute_hash, hash_file_content, hash_file_content_fast, hash_json, CacheStats, CompositeKey,
+    LruCache, LruCacheStats, TtlLruCache, TwoLevelCache, TwoLevelCacheBuilder,
 };

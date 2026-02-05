@@ -67,7 +67,8 @@ impl Tool for BashTool {
     fn meta(&self) -> ToolMeta {
         ToolMeta::new(Self::NAME)
             .display_name("Bash")
-            .description("Execute shell commands with optional timeout")
+            .description("Execute shell commands directly. PREFERRED for: ls, cat, cargo build/test/--version, git commands, npm install, quick scripts. \
+                         For long-running servers or watch processes that need background execution, use 'task_spawn' instead.")
             .category("execute")
             .permission(
                 PermissionDef::new("bash.execute", "execute")

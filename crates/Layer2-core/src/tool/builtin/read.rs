@@ -21,7 +21,8 @@ use crate::tool::security::{is_sensitive_path, PathValidator};
 /// Read 도구 입력
 #[derive(Debug, Deserialize)]
 pub struct ReadInput {
-    /// 파일 경로 (절대 경로 필수)
+    /// 파일 경로 (file_path, path, file 모두 허용)
+    #[serde(alias = "path", alias = "file")]
     pub file_path: String,
 
     /// 시작 줄 번호 (1-based, optional)
@@ -139,7 +140,7 @@ impl Tool for ReadTool {
             "properties": {
                 "file_path": {
                     "type": "string",
-                    "description": "Absolute path to the file to read"
+                    "description": "Path to the file to read. Can be absolute (e.g., /home/user/file.txt) or relative to the working directory (e.g., src/lib.rs)"
                 },
                 "offset": {
                     "type": "integer",
@@ -173,15 +174,15 @@ impl Tool for ReadTool {
             forge_foundation::Error::InvalidInput(format!("Invalid input: {}", e))
         })?;
 
-        let path = Path::new(&parsed.file_path);
+        let input_path = Path::new(&parsed.file_path);
 
-        // 경로 검증 - 절대 경로 필수
-        if !path.is_absolute() {
-            return Ok(ToolResult::error(format!(
-                "Path must be absolute, got: {}",
-                parsed.file_path
-            )));
-        }
+        // 상대 경로인 경우 working directory 기준으로 변환
+        let path = if input_path.is_absolute() {
+            input_path.to_path_buf()
+        } else {
+            context.working_dir().join(input_path)
+        };
+        let path = path.as_path();
 
         // 경로 보안 검증 (path traversal, 위험 경로 체크)
         let validator = PathValidator::new()

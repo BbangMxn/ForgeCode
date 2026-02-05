@@ -34,6 +34,7 @@ pub mod event;
 pub mod permission;
 pub mod registry;
 pub mod storage;
+pub mod strings;
 pub mod tokenizer;
 
 // ============================================================================
@@ -45,25 +46,38 @@ pub use error::{Error, Result};
 // Core (핵심 Trait 및 타입)
 // ============================================================================
 pub use core::{
-    // Traits
+    // Types - Message & Role (types.rs)
+    Message,
+    MessageRole,
+    // Types - Tool Call (types.rs)
+    ToolCall,
+    // Types - Tool Result Message (LLM 메시지용, types.rs)
+    ToolResultMessage,
+    // Types - Token & Stream (types.rs)
+    StreamEvent,
+    TokenUsage,
+    // Types - Execution Context (types.rs)
+    ExecutionEnv,
+    ModelHint,
+    PermissionRule,
+    PermissionRuleAction,
+    SessionInfo,
+    ToolSource,
+    // Traits - Tool (traits.rs)
+    Tool,
+    ToolContext,
+    ToolExecutionResult,
+    ToolMeta,
+    // ToolResult = ToolExecutionResult (하위 호환성)
+    ToolResult,
+    // Traits - Provider (traits.rs)
     ChatMessage,
     ChatRequest,
     ChatResponse,
     Configurable,
-    // Types
-    ExecutionEnv,
-    MessageRole,
-    ModelHint,
-    PermissionDelegate,
-    PermissionResponse,
-    PermissionRule,
-    PermissionRuleAction,
     Provider,
     ProviderMeta,
-    SessionInfo,
-    ShellConfig,
-    ShellType,
-    StreamEvent,
+    // Traits - Task (traits.rs)
     Task,
     TaskArtifact,
     TaskContext,
@@ -71,13 +85,12 @@ pub use core::{
     TaskObserver,
     TaskResult,
     TaskState,
-    TokenUsage,
-    Tool,
-    ToolCall,
-    ToolContext,
-    ToolMeta,
-    ToolResult,
-    ToolSource,
+    // Traits - Shell (traits.rs)
+    ShellConfig,
+    ShellType,
+    // Traits - Permission Delegation (traits.rs)
+    PermissionDelegate,
+    PermissionResponse,
 };
 
 // ============================================================================
@@ -86,14 +99,17 @@ pub use core::{
 pub use config::{
     // Forge (통합 설정)
     AutoSaveConfig,
+    CacheSettings,
     CustomColors,
     // Limits (사용량 제한)
     DailyLimits,
     EditorConfig,
     ExperimentalConfig,
     ForgeConfig,
+    GitConfig,
     LimitsConfig,
     MonthlyLimits,
+    SecurityConfig,
     SessionLimits,
     ThemeConfig,
     FORGE_CONFIG_FILE,
@@ -249,6 +265,10 @@ pub use cache::{
     // Response Cache
     ToolCache,
     TtlLruCache,
+    // Two-Level Cache
+    CacheStats,
+    TwoLevelCache,
+    TwoLevelCacheBuilder,
 };
 
 // ============================================================================
@@ -277,4 +297,56 @@ pub use tokenizer::{
     // Factory
     TokenizerFactory,
     TokenizerType,
+};
+
+// ============================================================================
+// Strings (Zero-Copy String Utilities)
+// ============================================================================
+pub use strings::{
+    // Types
+    CowStr,
+    CowString,
+    IntoCowString,
+    StringInterner,
+    // Functions
+    intern,
+    interner,
+    str_to_cow,
+    // Provider Constants
+    DISPLAY_ANTHROPIC,
+    DISPLAY_GEMINI,
+    DISPLAY_GROQ,
+    DISPLAY_OLLAMA,
+    DISPLAY_OPENAI,
+    PROVIDER_ANTHROPIC,
+    PROVIDER_GEMINI,
+    PROVIDER_GROQ,
+    PROVIDER_OLLAMA,
+    PROVIDER_OPENAI,
+    // Schema Constants
+    SCHEMA_TYPE_ARRAY,
+    SCHEMA_TYPE_BOOLEAN,
+    SCHEMA_TYPE_INTEGER,
+    SCHEMA_TYPE_NUMBER,
+    SCHEMA_TYPE_OBJECT,
+    SCHEMA_TYPE_STRING,
+    // Tool Constants
+    TOOL_BASH,
+    TOOL_EDIT,
+    TOOL_GLOB,
+    TOOL_GREP,
+    TOOL_READ,
+    TOOL_WRITE,
+    // Role Constants
+    ROLE_ASSISTANT,
+    ROLE_SYSTEM,
+    ROLE_TOOL,
+    ROLE_USER,
+    // Environment Constants
+    ENV_HOME,
+    ENV_PATH,
+    ENV_PWD,
+    ENV_SHELL,
+    ENV_TERM,
+    ENV_USER,
 };

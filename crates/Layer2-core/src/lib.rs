@@ -286,7 +286,8 @@ mod tests {
     #[test]
     fn test_all_tools_count() {
         let tools = all_tools();
-        assert_eq!(tools.len(), 6);
+        // 6 filesystem/execute tools + 7 task tools = 13
+        assert_eq!(tools.len(), 13);
     }
 
     #[tokio::test]

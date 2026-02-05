@@ -46,3 +46,7 @@ uuid = { workspace = true }
 chrono = { workspace = true }
 dirs = { workspace = true }
 anyhow = { workspace = true }
+textwrap = "0.16"
+
+# HTTP (for setup wizard connection test)
+ureq = "2.9"

@@ -46,7 +46,7 @@ pub use retry::RetryConfig;
 pub use providers::anthropic::AnthropicProvider;
 pub use providers::gemini::GeminiProvider;
 pub use providers::groq::GroqProvider;
-pub use providers::ollama::OllamaProvider;
+pub use providers::ollama::{OllamaModelDetails, OllamaModelInfo, OllamaProvider};
 pub use providers::openai::OpenAiProvider;
 
 // Agent provider abstraction (for Claude Agent SDK, Codex, etc.)

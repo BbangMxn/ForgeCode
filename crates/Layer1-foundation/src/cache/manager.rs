@@ -100,8 +100,12 @@ impl CacheManager {
         });
 
         // Build response cache components
+        // Memory limit: 10% of total cache memory (default 10MB of 100MB)
+        let tool_max_bytes = config.limits.max_memory_mb * 1024 * 1024 / 10;
         let tool_cache = ToolCache::with_config(ToolCacheConfig {
             max_entries: config.response.tool_cache_size,
+            max_bytes: tool_max_bytes,
+            max_entry_bytes: 1024 * 1024, // 1 MB per entry
             cacheable_tools: vec!["Read".to_string(), "Glob".to_string(), "Grep".to_string()],
             enable_file_invalidation: config.response.enable_file_watcher,
         });

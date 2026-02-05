@@ -1,6 +1,6 @@
 //! Event handling for TUI
 
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use std::time::Duration;
 use tokio::sync::mpsc;
 
@@ -43,6 +43,12 @@ impl EventHandler {
                 if event::poll(tick_rate).unwrap_or(false) {
                     match event::read() {
                         Ok(Event::Key(key)) => {
+                            // Windows IME fix: Only process Press events, ignore Release
+                            // This prevents double input for Korean/Japanese/Chinese characters
+                            if key.kind != KeyEventKind::Press {
+                                continue;
+                            }
+                            
                             // Check for quit
                             if key.code == KeyCode::Char('c')
                                 && key.modifiers.contains(KeyModifiers::CONTROL)
@@ -54,6 +60,14 @@ impl EventHandler {
                         }
                         Ok(Event::Resize(w, h)) => {
                             let _ = tx.send(TuiEvent::Resize(w, h));
+                        }
+                        // Handle paste events (some IME use this)
+                        Ok(Event::Paste(text)) => {
+                            // Convert paste to key events
+                            for c in text.chars() {
+                                let key = KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
+                                let _ = tx.send(TuiEvent::Key(key));
+                            }
                         }
                         _ => {}
                     }

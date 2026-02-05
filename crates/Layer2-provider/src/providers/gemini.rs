@@ -63,12 +63,17 @@ impl GeminiProvider {
             id: "gemini".to_string(),
             display_name: "Google Gemini".to_string(),
             models: vec![
+                // Gemini 3 Series (2026)
+                Self::get_model_info("gemini-3-flash"),
+                Self::get_model_info("gemini-3-pro"),
+                // Gemini 2.5 Series
+                Self::get_model_info("gemini-2.5-flash"),
+                Self::get_model_info("gemini-2.5-pro"),
+                // Gemini 2.0 Series
                 Self::get_model_info("gemini-2.0-flash"),
-                Self::get_model_info("gemini-2.0-flash-lite"),
-                Self::get_model_info("gemini-1.5-pro"),
-                Self::get_model_info("gemini-1.5-flash"),
+                Self::get_model_info("gemini-2.0-pro"),
             ],
-            default_model: "gemini-2.0-flash".to_string(),
+            default_model: "gemini-3-flash".to_string(),
             config_keys: vec![ConfigKey {
                 name: "api_key".to_string(),
                 required: true,
@@ -82,6 +87,57 @@ impl GeminiProvider {
 
     fn get_model_info(model_id: &str) -> ModelInfo {
         match model_id {
+            // Gemini 3 Series (2026)
+            "gemini-3-flash" | "gemini-3-flash-preview" => ModelInfo {
+                id: "gemini-3-flash".to_string(),
+                provider: "gemini".to_string(),
+                display_name: "Gemini 3 Flash".to_string(),
+                context_window: 1000000, // 1M tokens
+                max_output_tokens: 64000,
+                supports_tools: true,
+                supports_vision: true,
+                supports_thinking: true,
+                input_price_per_1m: 0.50,
+                output_price_per_1m: 3.00,
+            },
+            "gemini-3-pro" => ModelInfo {
+                id: "gemini-3-pro".to_string(),
+                provider: "gemini".to_string(),
+                display_name: "Gemini 3 Pro".to_string(),
+                context_window: 1000000, // 1M tokens
+                max_output_tokens: 64000,
+                supports_tools: true,
+                supports_vision: true,
+                supports_thinking: true,
+                input_price_per_1m: 1.25,
+                output_price_per_1m: 5.00,
+            },
+            // Gemini 2.5 Series
+            "gemini-2.5-flash" | "gemini-2.5-flash-preview" => ModelInfo {
+                id: "gemini-2.5-flash".to_string(),
+                provider: "gemini".to_string(),
+                display_name: "Gemini 2.5 Flash".to_string(),
+                context_window: 1048576, // 1M tokens
+                max_output_tokens: 65536,
+                supports_tools: true,
+                supports_vision: true,
+                supports_thinking: true,
+                input_price_per_1m: 0.15,
+                output_price_per_1m: 0.60,
+            },
+            "gemini-2.5-pro" | "gemini-2.5-pro-preview" => ModelInfo {
+                id: "gemini-2.5-pro".to_string(),
+                provider: "gemini".to_string(),
+                display_name: "Gemini 2.5 Pro".to_string(),
+                context_window: 1048576, // 1M tokens
+                max_output_tokens: 65536,
+                supports_tools: true,
+                supports_vision: true,
+                supports_thinking: true,
+                input_price_per_1m: 1.25,
+                output_price_per_1m: 10.00,
+            },
+            // Gemini 2.0 Series
             "gemini-2.0-flash" | "gemini-2.0-flash-exp" => ModelInfo {
                 id: "gemini-2.0-flash".to_string(),
                 provider: "gemini".to_string(),
@@ -94,41 +150,17 @@ impl GeminiProvider {
                 input_price_per_1m: 0.075,
                 output_price_per_1m: 0.30,
             },
-            "gemini-2.0-flash-lite" => ModelInfo {
-                id: "gemini-2.0-flash-lite".to_string(),
+            "gemini-2.0-pro" => ModelInfo {
+                id: "gemini-2.0-pro".to_string(),
                 provider: "gemini".to_string(),
-                display_name: "Gemini 2.0 Flash Lite".to_string(),
-                context_window: 1048576,
+                display_name: "Gemini 2.0 Pro".to_string(),
+                context_window: 2097152, // 2M tokens
                 max_output_tokens: 8192,
                 supports_tools: true,
                 supports_vision: true,
-                supports_thinking: false,
-                input_price_per_1m: 0.0375,
-                output_price_per_1m: 0.15,
-            },
-            "gemini-1.5-pro" | "gemini-1.5-pro-latest" => ModelInfo {
-                id: "gemini-1.5-pro".to_string(),
-                provider: "gemini".to_string(),
-                display_name: "Gemini 1.5 Pro".to_string(),
-                context_window: 2097152,
-                max_output_tokens: 8192,
-                supports_tools: true,
-                supports_vision: true,
-                supports_thinking: false,
+                supports_thinking: true,
                 input_price_per_1m: 1.25,
                 output_price_per_1m: 5.00,
-            },
-            "gemini-1.5-flash" | "gemini-1.5-flash-latest" => ModelInfo {
-                id: "gemini-1.5-flash".to_string(),
-                provider: "gemini".to_string(),
-                display_name: "Gemini 1.5 Flash".to_string(),
-                context_window: 1048576,
-                max_output_tokens: 8192,
-                supports_tools: true,
-                supports_vision: true,
-                supports_thinking: false,
-                input_price_per_1m: 0.075,
-                output_price_per_1m: 0.30,
             },
             _ => ModelInfo::new(model_id, "gemini"),
         }

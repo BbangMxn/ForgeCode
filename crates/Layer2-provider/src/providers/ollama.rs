@@ -20,6 +20,10 @@ use tokio_util::io::StreamReader;
 const DEFAULT_TIMEOUT_SECS: u64 = 600; // Longer timeout for local models
 
 /// Ollama provider for local models
+///
+/// Supports automatic model info detection via /api/show endpoint.
+/// Use `with_auto_config()` async constructor to auto-detect model capabilities,
+/// or `with_capabilities()` to manually configure.
 pub struct OllamaProvider {
     client: Client,
     base_url: String,
@@ -28,7 +32,9 @@ pub struct OllamaProvider {
 }
 
 impl OllamaProvider {
-    /// Create a new Ollama provider
+    /// Create a new Ollama provider with default settings
+    ///
+    /// For auto-detection of model capabilities, use `with_auto_config()` instead.
     pub fn new(base_url: impl Into<String>, model: impl Into<String>) -> Self {
         let model_id = model.into();
         let base_url = base_url.into();
@@ -53,7 +59,7 @@ impl OllamaProvider {
         self
     }
 
-    /// Set model capabilities
+    /// Set model capabilities manually
     pub fn with_capabilities(
         mut self,
         context_window: u32,
@@ -64,6 +70,36 @@ impl OllamaProvider {
         self.model_info.max_output_tokens = max_output_tokens;
         self.model_info.supports_vision = supports_vision;
         self
+    }
+
+    /// Internal method to fetch model info from /api/show
+    async fn fetch_model_info_internal(&self, model: &str) -> Result<OllamaModelDetails, ProviderError> {
+        let url = format!("{}/api/show", self.base_url);
+
+        #[derive(Serialize)]
+        struct ShowRequest<'a> {
+            name: &'a str,
+        }
+
+        let response = self
+            .client
+            .post(&url)
+            .json(&ShowRequest { name: model })
+            .send()
+            .await
+            .map_err(|e| ProviderError::Network(e.to_string()))?;
+
+        if !response.status().is_success() {
+            return Err(ProviderError::ServerError(format!(
+                "Failed to fetch model info: {}",
+                response.status()
+            )));
+        }
+
+        response
+            .json()
+            .await
+            .map_err(|e| ProviderError::InvalidResponse(e.to_string()))
     }
 
     fn create_metadata(base_url: &str) -> ProviderMetadata {
@@ -172,6 +208,150 @@ impl OllamaProvider {
 
         Ok(tags.models.into_iter().map(|m| m.name).collect())
     }
+
+    /// Fetch model information from Ollama API
+    /// This calls /api/show to get actual model parameters
+    pub async fn fetch_model_info(&self) -> Result<OllamaModelDetails, ProviderError> {
+        self.fetch_model_info_internal(&self.model_info.id).await
+    }
+
+    /// Apply model details to ModelInfo
+    fn apply_model_details(info: &mut ModelInfo, details: &OllamaModelDetails) {
+        // Extract context window from model parameters
+        if let Some(ref params) = details.model_info {
+            // Try to get context length from various parameter names
+            // Ollama uses different keys depending on model
+            if let Some(ctx) = params
+                .get("context_length")
+                .or_else(|| params.get("num_ctx"))
+                .or_else(|| params.get("context_window"))
+                .or_else(|| params.get("llama.context_length"))
+            {
+                if let Some(ctx_value) = ctx.as_u64() {
+                    info.context_window = ctx_value as u32;
+                }
+            }
+        }
+
+        // Check for vision support from model details
+        if let Some(ref template) = details.template {
+            // Models with vision support often have specific templates
+            if template.contains("vision") || template.contains("image") {
+                info.supports_vision = true;
+            }
+        }
+
+        // Check model family from details
+        if let Some(ref family) = details.details.as_ref().and_then(|d| d.family.as_ref()) {
+            let family_lower = family.to_lowercase();
+            // llava, moondream, bakllava 등은 vision 지원
+            if family_lower.contains("llava")
+                || family_lower.contains("moondream")
+                || family_lower.contains("bakllava")
+            {
+                info.supports_vision = true;
+            }
+        }
+
+        // Check projector in details (vision models have this)
+        if let Some(ref projector) = details.projector_info {
+            if !projector.is_empty() {
+                info.supports_vision = true;
+            }
+        }
+    }
+
+    /// Create provider with auto-detected model info from Ollama API
+    ///
+    /// This async constructor fetches model details via /api/show endpoint
+    /// and automatically configures context_window and vision support.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let provider = OllamaProvider::with_auto_config(
+    ///     "http://localhost:11434",
+    ///     "llama3.2"
+    /// ).await?;
+    ///
+    /// // Model info is now auto-configured
+    /// println!("Context window: {}", provider.model().context_window);
+    /// ```
+    pub async fn with_auto_config(
+        base_url: impl Into<String>,
+        model: impl Into<String>,
+    ) -> Result<Self, ProviderError> {
+        let mut provider = Self::new(base_url, model);
+
+        // Try to fetch model info
+        match provider.fetch_model_info().await {
+            Ok(details) => {
+                Self::apply_model_details(&mut provider.model_info, &details);
+                tracing::info!(
+                    model = %provider.model_info.id,
+                    context_window = provider.model_info.context_window,
+                    supports_vision = provider.model_info.supports_vision,
+                    "Auto-configured Ollama model from /api/show"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    model = %provider.model_info.id,
+                    error = %e,
+                    "Could not auto-configure model, using defaults"
+                );
+            }
+        }
+
+        Ok(provider)
+    }
+}
+
+// ============================================================================
+// Ollama Model Details (from /api/show)
+// ============================================================================
+
+/// Model details returned by /api/show endpoint
+#[derive(Debug, Deserialize)]
+pub struct OllamaModelDetails {
+    /// Model file path
+    #[serde(default)]
+    pub modelfile: String,
+
+    /// Parameters string
+    #[serde(default)]
+    pub parameters: String,
+
+    /// Template for prompt formatting
+    #[serde(default)]
+    pub template: Option<String>,
+
+    /// Model details (family, parameter size, etc.)
+    #[serde(default)]
+    pub details: Option<OllamaModelInfo>,
+
+    /// Model info with numeric parameters
+    #[serde(default)]
+    pub model_info: Option<serde_json::Map<String, serde_json::Value>>,
+
+    /// Projector info (for vision models)
+    #[serde(default)]
+    pub projector_info: Option<serde_json::Map<String, serde_json::Value>>,
+}
+
+/// Detailed model information
+#[derive(Debug, Deserialize)]
+pub struct OllamaModelInfo {
+    /// Model format (e.g., "gguf")
+    pub format: Option<String>,
+
+    /// Model family (e.g., "llama", "qwen")
+    pub family: Option<String>,
+
+    /// Parameter size (e.g., "8B", "70B")
+    pub parameter_size: Option<String>,
+
+    /// Quantization level (e.g., "Q4_K_M")
+    pub quantization_level: Option<String>,
 }
 
 #[async_trait]

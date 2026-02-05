@@ -8,6 +8,11 @@
 //! 2. **계층화된 설계**: macOS TCC 스타일로 플러그인이 권한을 등록
 //! 3. **유연한 Shell 지원**: bash, powershell, cmd 등 다양한 쉘 지원
 //!
+//! ## 타입 계층
+//!
+//! - `types.rs`: 데이터 타입 (Message, ToolCall, TokenUsage 등)
+//! - `traits.rs`: 인터페이스 (Tool, Provider, Task 등)
+//!
 //! ## 도구 유형
 //!
 //! ```text
@@ -41,6 +46,56 @@
 pub mod traits;
 pub mod types;
 
-// Re-exports
-pub use traits::*;
-pub use types::*;
+// ============================================================================
+// Types - 데이터 타입 (types.rs)
+// ============================================================================
+
+// Message & Role
+pub use types::{Message, MessageRole};
+
+// Tool Call
+pub use types::ToolCall;
+
+// Tool Result Message (LLM 메시지용)
+pub use types::ToolResultMessage;
+
+// Token & Stream
+pub use types::{StreamEvent, TokenUsage};
+
+// Execution Context
+pub use types::{ExecutionEnv, ToolSource};
+
+// Permission Rules
+pub use types::{PermissionRule, PermissionRuleAction};
+
+// Session & Model
+pub use types::{ModelHint, SessionInfo};
+
+// ============================================================================
+// Traits - 인터페이스 (traits.rs)
+// ============================================================================
+
+// Tool trait & related
+pub use traits::{Tool, ToolContext, ToolExecutionResult, ToolMeta};
+
+// ToolResult alias (traits::ToolExecutionResult의 별칭)
+pub use traits::ToolResult;
+
+// Provider trait & related
+pub use traits::{
+    ChatMessage, ChatRequest, ChatResponse, Configurable, Provider, ProviderMeta,
+};
+
+// Task trait & related
+pub use traits::{Task, TaskArtifact, TaskContext, TaskMeta, TaskObserver, TaskResult, TaskState};
+
+// Shell configuration
+pub use traits::{ShellConfig, ShellType};
+
+// Permission delegation
+pub use traits::{PermissionDelegate, PermissionResponse};
+
+// Backward compatibility aliases
+pub use traits::ToolResult as ToolExecResult;
+#[allow(deprecated)]
+pub use types::ToolResultMsg;

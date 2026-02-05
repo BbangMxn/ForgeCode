@@ -12,7 +12,7 @@ macOS의 계층화된 시스템 구조에서 영감을 받아, 각 기능을 독
 │                   forge-agent (Layer 3)                 │
 │          에이전트 루프, 세션 관리, 대화 히스토리          │
 ├──────────────────┬──────────────────┬───────────────────┤
-│  forge-provider  │   forge-tool     │    forge-task     │
+│  forge-provider  │   forge-core     │    forge-task     │
 │    (Layer 2)     │    (Layer 2)     │     (Layer 2)     │
 │   LLM API 연결   │   도구 레지스트리  │    작업 실행/격리  │
 ├──────────────────┴──────────────────┴───────────────────┤

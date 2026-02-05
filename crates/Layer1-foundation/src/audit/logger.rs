@@ -615,7 +615,7 @@ fn parse_result(s: &str) -> AuditResult {
 mod tests {
     use super::*;
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_audit_logger_basic() {
         let logger = AuditLogger::in_memory().unwrap();
 
@@ -634,7 +634,7 @@ mod tests {
         assert_eq!(entry.action, AuditAction::ToolSucceeded);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_audit_query() {
         let logger = AuditLogger::in_memory().unwrap();
 
@@ -650,7 +650,7 @@ mod tests {
         assert_eq!(entries.len(), 3);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_audit_statistics() {
         let logger = AuditLogger::in_memory().unwrap();
 

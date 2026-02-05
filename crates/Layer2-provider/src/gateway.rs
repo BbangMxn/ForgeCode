@@ -91,6 +91,93 @@ impl Gateway {
         Self::from_config(&config)
     }
 
+    /// Create gateway with auto-configured Ollama models
+    ///
+    /// This async version fetches model information from Ollama API
+    /// to automatically configure context_window and vision support.
+    pub async fn load_with_auto_config() -> Result<Self> {
+        let config = ProviderConfig::load()?;
+        Self::from_config_async(&config).await
+    }
+
+    /// Create a new gateway from ProviderConfig with async model detection
+    ///
+    /// For Ollama providers, this fetches model info via /api/show endpoint
+    /// to automatically configure context_window and vision support.
+    pub async fn from_config_async(config: &ProviderConfig) -> Result<Self> {
+        let mut providers: HashMap<String, Arc<dyn Provider>> = HashMap::new();
+
+        for (name, provider_config) in config.list_enabled() {
+            let provider: Arc<dyn Provider> = match provider_config.provider_type {
+                ProviderType::Anthropic => {
+                    let api_key = provider_config.api_key.as_deref().unwrap_or("");
+                    let model = provider_config.effective_model();
+                    let max_tokens = provider_config.effective_max_tokens();
+                    Arc::new(AnthropicProvider::new(api_key, model, max_tokens))
+                }
+                ProviderType::Openai => {
+                    let api_key = provider_config.api_key.as_deref().unwrap_or("");
+                    let model = provider_config.effective_model();
+                    let max_tokens = provider_config.effective_max_tokens();
+                    Arc::new(OpenAiProvider::new(api_key, model, max_tokens))
+                }
+                ProviderType::Ollama => {
+                    let base_url = provider_config.effective_base_url();
+                    let model = provider_config.effective_model();
+                    // Use async constructor for auto-detection
+                    match OllamaProvider::with_auto_config(base_url, model).await {
+                        Ok(provider) => Arc::new(provider),
+                        Err(e) => {
+                            tracing::warn!(
+                                provider = %name,
+                                error = %e,
+                                "Failed to auto-configure Ollama, using defaults"
+                            );
+                            Arc::new(OllamaProvider::new(
+                                provider_config.effective_base_url(),
+                                provider_config.effective_model(),
+                            ))
+                        }
+                    }
+                }
+                ProviderType::Gemini => {
+                    let api_key = provider_config.api_key.as_deref().unwrap_or("");
+                    let model = provider_config.effective_model();
+                    let max_tokens = provider_config.effective_max_tokens();
+                    Arc::new(GeminiProvider::new(api_key, model, max_tokens))
+                }
+                ProviderType::Groq => {
+                    let api_key = provider_config.api_key.as_deref().unwrap_or("");
+                    let model = provider_config.effective_model();
+                    let max_tokens = provider_config.effective_max_tokens();
+                    Arc::new(GroqProvider::new(api_key, model, max_tokens))
+                }
+            };
+
+            providers.insert(name.clone(), provider);
+        }
+
+        if providers.is_empty() {
+            return Err(Error::Config(
+                "No LLM providers configured. Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or configure Ollama.".to_string(),
+            ));
+        }
+
+        // Determine default provider
+        let default_provider = config
+            .default
+            .clone()
+            .filter(|d| providers.contains_key(d))
+            .or_else(|| providers.keys().next().cloned())
+            .unwrap_or_default();
+
+        Ok(Self {
+            providers,
+            default_provider: RwLock::new(default_provider),
+            retry_config: RetryConfig::default(),
+        })
+    }
+
     /// Create an empty gateway (for testing or manual provider setup)
     pub fn new() -> Self {
         Self {

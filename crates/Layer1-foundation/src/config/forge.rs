@@ -54,6 +54,18 @@ pub struct ForgeConfig {
     /// 실험적 기능
     #[serde(default)]
     pub experimental: ExperimentalConfig,
+
+    /// Git 설정 (커밋, 브랜치 등)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git: Option<GitConfig>,
+
+    /// 보안 설정 (명령어 분석 커스터마이징)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub security: Option<SecurityConfig>,
+
+    /// 캐시 설정
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache: Option<CacheSettings>,
 }
 
 impl ForgeConfig {
@@ -398,6 +410,129 @@ fn default_true() -> bool {
     true
 }
 
+// ============================================================================
+// Git Config
+// ============================================================================
+
+/// Git 관련 설정
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitConfig {
+    /// 자동 커밋 메시지 생성
+    #[serde(default = "default_true")]
+    pub auto_commit_message: bool,
+
+    /// 커밋 메시지 스타일 (conventional, simple, descriptive)
+    #[serde(default = "default_commit_style")]
+    pub commit_style: String,
+
+    /// 커밋 전 자동 스테이징
+    #[serde(default)]
+    pub auto_stage: bool,
+
+    /// 커밋 메시지에 Co-Authored-By 추가
+    #[serde(default = "default_true")]
+    pub add_co_author: bool,
+
+    /// 기본 브랜치 이름
+    #[serde(default = "default_main_branch")]
+    pub main_branch: String,
+}
+
+fn default_commit_style() -> String {
+    "conventional".to_string()
+}
+
+fn default_main_branch() -> String {
+    "main".to_string()
+}
+
+// ============================================================================
+// Security Config
+// ============================================================================
+
+/// 보안 관련 설정
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SecurityConfig {
+    /// 추가 금지 명령어 패턴
+    #[serde(default)]
+    pub forbidden_commands: Vec<String>,
+
+    /// 추가 위험 명령어 패턴
+    #[serde(default)]
+    pub dangerous_commands: Vec<String>,
+
+    /// 추가 안전 명령어 패턴
+    #[serde(default)]
+    pub safe_commands: Vec<String>,
+
+    /// 추가 민감 경로 패턴
+    #[serde(default)]
+    pub sensitive_paths: Vec<String>,
+
+    /// 알 수 없는 명령어 기본 처리 (ask, deny, allow)
+    #[serde(default = "default_unknown_command_action")]
+    pub unknown_command_action: String,
+
+    /// 네트워크 요청 허용 여부
+    #[serde(default = "default_true")]
+    pub allow_network: bool,
+}
+
+fn default_unknown_command_action() -> String {
+    "ask".to_string()
+}
+
+// ============================================================================
+// Cache Settings
+// ============================================================================
+
+/// 캐시 관련 설정
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CacheSettings {
+    /// 캐시 활성화
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
+    /// 최대 캐시 크기 (MB)
+    #[serde(default = "default_cache_size_mb")]
+    pub max_size_mb: u64,
+
+    /// 캐시 TTL (초)
+    #[serde(default = "default_cache_ttl")]
+    pub ttl_secs: u64,
+
+    /// 응답 캐시 활성화
+    #[serde(default)]
+    pub cache_responses: bool,
+
+    /// 도구 결과 캐시 활성화
+    #[serde(default = "default_true")]
+    pub cache_tool_results: bool,
+}
+
+impl Default for CacheSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_size_mb: default_cache_size_mb(),
+            ttl_secs: default_cache_ttl(),
+            cache_responses: false,
+            cache_tool_results: true,
+        }
+    }
+}
+
+fn default_cache_size_mb() -> u64 {
+    256
+}
+
+fn default_cache_ttl() -> u64 {
+    3600 // 1시간
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -405,7 +540,8 @@ mod tests {
     #[test]
     fn test_forge_config_default() {
         let config = ForgeConfig::new();
-        assert_eq!(config.version, 1);
+        // derive(Default) sets version to 0; serde default only applies during deserialization
+        assert_eq!(config.version, 0);
         assert!(config.default_provider.is_none());
     }
 

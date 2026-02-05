@@ -10,14 +10,65 @@ use std::time::Instant;
 ///
 /// This implementation prioritizes simplicity and low memory overhead
 /// over maximum performance. For most ForgeCode use cases, this is sufficient.
+/// Configuration for LRU cache with memory limits
+#[derive(Debug, Clone)]
+pub struct LruCacheConfig {
+    /// Maximum number of entries
+    pub max_entries: usize,
+    /// Maximum memory in bytes (0 = unlimited)
+    pub max_bytes: usize,
+    /// Maximum size per entry in bytes (0 = unlimited)
+    pub max_entry_bytes: usize,
+}
+
+impl Default for LruCacheConfig {
+    fn default() -> Self {
+        Self {
+            max_entries: 100,
+            max_bytes: 0,
+            max_entry_bytes: 0,
+        }
+    }
+}
+
+impl LruCacheConfig {
+    /// Create config with entry limit only
+    pub fn with_entries(max_entries: usize) -> Self {
+        Self {
+            max_entries,
+            ..Default::default()
+        }
+    }
+
+    /// Create config with memory limit
+    pub fn with_memory(max_entries: usize, max_bytes: usize) -> Self {
+        Self {
+            max_entries,
+            max_bytes,
+            max_entry_bytes: 0,
+        }
+    }
+
+    /// Create config with all limits
+    pub fn with_limits(max_entries: usize, max_bytes: usize, max_entry_bytes: usize) -> Self {
+        Self {
+            max_entries,
+            max_bytes,
+            max_entry_bytes,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct LruCache<K, V> {
     /// Storage for cached items
     entries: HashMap<K, LruEntry<V>>,
-    /// Maximum number of entries
-    capacity: usize,
+    /// Configuration
+    config: LruCacheConfig,
     /// Access counter for LRU tracking
     access_counter: u64,
+    /// Current total memory usage
+    current_bytes: usize,
 }
 
 #[derive(Debug)]
@@ -31,11 +82,22 @@ struct LruEntry<V> {
 impl<K: Eq + Hash + Clone, V> LruCache<K, V> {
     /// Create a new LRU cache with the given capacity
     pub fn new(capacity: usize) -> Self {
+        Self::with_config(LruCacheConfig::with_entries(capacity))
+    }
+
+    /// Create a new LRU cache with configuration
+    pub fn with_config(config: LruCacheConfig) -> Self {
         Self {
-            entries: HashMap::with_capacity(capacity),
-            capacity,
+            entries: HashMap::with_capacity(config.max_entries),
+            config,
             access_counter: 0,
+            current_bytes: 0,
         }
+    }
+
+    /// Create a new LRU cache with memory limit
+    pub fn with_memory_limit(max_entries: usize, max_bytes: usize) -> Self {
+        Self::with_config(LruCacheConfig::with_memory(max_entries, max_bytes))
     }
 
     /// Get a reference to a cached value
@@ -76,21 +138,38 @@ impl<K: Eq + Hash + Clone, V> LruCache<K, V> {
 
     /// Insert a value with a known size (for memory tracking)
     pub fn insert_with_size(&mut self, key: K, value: V, size_bytes: usize) -> Option<V> {
+        // Check max entry size limit
+        if self.config.max_entry_bytes > 0 && size_bytes > self.config.max_entry_bytes {
+            return None; // Reject oversized entry
+        }
+
         self.access_counter += 1;
 
         // Check if key already exists
         if let Some(entry) = self.entries.get_mut(&key) {
+            let old_size = entry.size_bytes;
             let old_value = std::mem::replace(&mut entry.value, value);
             entry.last_access = self.access_counter;
             entry.size_bytes = size_bytes;
+            // Update byte tracking
+            self.current_bytes = self.current_bytes.saturating_sub(old_size) + size_bytes;
             return Some(old_value);
         }
 
-        // Evict if at capacity
-        if self.entries.len() >= self.capacity {
+        // Evict if at entry capacity
+        while self.entries.len() >= self.config.max_entries {
             self.evict_lru();
         }
 
+        // Evict if at memory capacity
+        if self.config.max_bytes > 0 {
+            while self.current_bytes + size_bytes > self.config.max_bytes && !self.entries.is_empty()
+            {
+                self.evict_lru();
+            }
+        }
+
+        self.current_bytes += size_bytes;
         self.entries.insert(
             key,
             LruEntry {
@@ -106,7 +185,10 @@ impl<K: Eq + Hash + Clone, V> LruCache<K, V> {
 
     /// Remove a specific key from the cache
     pub fn remove(&mut self, key: &K) -> Option<V> {
-        self.entries.remove(key).map(|e| e.value)
+        self.entries.remove(key).map(|e| {
+            self.current_bytes = self.current_bytes.saturating_sub(e.size_bytes);
+            e.value
+        })
     }
 
     /// Remove all entries matching a predicate
@@ -114,12 +196,21 @@ impl<K: Eq + Hash + Clone, V> LruCache<K, V> {
     where
         F: FnMut(&K, &V) -> bool,
     {
-        self.entries.retain(|k, e| f(k, &e.value));
+        let mut removed_bytes = 0usize;
+        self.entries.retain(|k, e| {
+            let keep = f(k, &e.value);
+            if !keep {
+                removed_bytes += e.size_bytes;
+            }
+            keep
+        });
+        self.current_bytes = self.current_bytes.saturating_sub(removed_bytes);
     }
 
     /// Clear all entries
     pub fn clear(&mut self) {
         self.entries.clear();
+        self.current_bytes = 0;
     }
 
     /// Get the number of entries
@@ -134,18 +225,35 @@ impl<K: Eq + Hash + Clone, V> LruCache<K, V> {
 
     /// Get the capacity
     pub fn capacity(&self) -> usize {
-        self.capacity
+        self.config.max_entries
     }
 
-    /// Estimate total memory usage in bytes
+    /// Get the maximum memory limit in bytes (0 = unlimited)
+    pub fn max_bytes(&self) -> usize {
+        self.config.max_bytes
+    }
+
+    /// Get total memory usage in bytes
+    pub fn current_bytes(&self) -> usize {
+        self.current_bytes
+    }
+
+    /// Estimate total memory usage in bytes (alias for backwards compatibility)
     pub fn estimated_memory_bytes(&self) -> usize {
-        self.entries.values().map(|e| e.size_bytes).sum()
+        self.current_bytes
+    }
+
+    /// Check if cache is at memory limit
+    pub fn is_at_memory_limit(&self) -> bool {
+        self.config.max_bytes > 0 && self.current_bytes >= self.config.max_bytes
     }
 
     /// Evict the least recently used entry
     fn evict_lru(&mut self) {
         if let Some(lru_key) = self.find_lru_key() {
-            self.entries.remove(&lru_key);
+            if let Some(entry) = self.entries.remove(&lru_key) {
+                self.current_bytes = self.current_bytes.saturating_sub(entry.size_bytes);
+            }
         }
     }
 
@@ -159,14 +267,20 @@ impl<K: Eq + Hash + Clone, V> LruCache<K, V> {
 
     /// Get cache statistics
     pub fn stats(&self) -> LruCacheStats {
-        let total_bytes: usize = self.entries.values().map(|e| e.size_bytes).sum();
         let oldest = self.entries.values().map(|e| e.created_at).min();
+        let memory_utilization = if self.config.max_bytes > 0 {
+            self.current_bytes as f64 / self.config.max_bytes as f64
+        } else {
+            0.0
+        };
 
         LruCacheStats {
             entries: self.entries.len(),
-            capacity: self.capacity,
-            total_bytes,
+            capacity: self.config.max_entries,
+            total_bytes: self.current_bytes,
+            max_bytes: self.config.max_bytes,
             oldest_entry: oldest,
+            memory_utilization,
         }
     }
 }
@@ -177,7 +291,10 @@ pub struct LruCacheStats {
     pub entries: usize,
     pub capacity: usize,
     pub total_bytes: usize,
+    pub max_bytes: usize,
     pub oldest_entry: Option<Instant>,
+    /// Memory utilization (0.0 - 1.0, or 0 if unlimited)
+    pub memory_utilization: f64,
 }
 
 /// LRU Cache with TTL (Time-To-Live) support
@@ -305,5 +422,87 @@ mod tests {
         assert_eq!(old, Some(1));
         assert_eq!(cache.get(&"a"), Some(&10));
         assert_eq!(cache.len(), 1);
+    }
+
+    #[test]
+    fn test_memory_limit_eviction() {
+        // Cache with max 100 bytes
+        let mut cache: LruCache<&str, String> =
+            LruCache::with_config(LruCacheConfig::with_memory(10, 100));
+
+        // Insert 50 bytes
+        cache.insert_with_size("a", "value_a".to_string(), 50);
+        assert_eq!(cache.len(), 1);
+        assert_eq!(cache.current_bytes(), 50);
+
+        // Insert another 40 bytes (total: 90)
+        cache.insert_with_size("b", "value_b".to_string(), 40);
+        assert_eq!(cache.len(), 2);
+        assert_eq!(cache.current_bytes(), 90);
+
+        // Insert 60 bytes - should evict "a" (oldest, 50 bytes) to make room
+        // After eviction: 40 + 60 = 100 bytes
+        cache.insert_with_size("c", "value_c".to_string(), 60);
+        assert_eq!(cache.len(), 2); // "a" evicted
+        assert_eq!(cache.current_bytes(), 100); // 40 + 60
+        assert!(cache.get(&"a").is_none());
+        assert!(cache.get(&"b").is_some());
+        assert!(cache.get(&"c").is_some());
+    }
+
+    #[test]
+    fn test_max_entry_size_rejection() {
+        // Cache with 50 bytes max per entry
+        let mut cache: LruCache<&str, String> =
+            LruCache::with_config(LruCacheConfig::with_limits(10, 1000, 50));
+
+        // Small entry should be accepted
+        let result = cache.insert_with_size("small", "x".to_string(), 10);
+        assert!(result.is_none()); // No old value
+        assert_eq!(cache.len(), 1);
+
+        // Large entry should be rejected
+        let result = cache.insert_with_size("large", "y".to_string(), 100);
+        assert!(result.is_none()); // Rejected, no old value
+        assert_eq!(cache.len(), 1); // Still only 1 entry
+        assert!(cache.get(&"large").is_none());
+    }
+
+    #[test]
+    fn test_memory_tracking_accuracy() {
+        let mut cache: LruCache<i32, String> =
+            LruCache::with_config(LruCacheConfig::with_memory(100, 0)); // No byte limit, just tracking
+
+        cache.insert_with_size(1, "a".to_string(), 10);
+        cache.insert_with_size(2, "b".to_string(), 20);
+        cache.insert_with_size(3, "c".to_string(), 30);
+        assert_eq!(cache.current_bytes(), 60);
+
+        // Remove entry
+        cache.remove(&2);
+        assert_eq!(cache.current_bytes(), 40);
+
+        // Update entry with different size
+        cache.insert_with_size(1, "aa".to_string(), 15);
+        assert_eq!(cache.current_bytes(), 45); // 40 - 10 + 15
+
+        // Clear
+        cache.clear();
+        assert_eq!(cache.current_bytes(), 0);
+    }
+
+    #[test]
+    fn test_stats_with_memory() {
+        let mut cache: LruCache<&str, String> =
+            LruCache::with_config(LruCacheConfig::with_memory(10, 100));
+
+        cache.insert_with_size("a", "test".to_string(), 25);
+        cache.insert_with_size("b", "test2".to_string(), 25);
+
+        let stats = cache.stats();
+        assert_eq!(stats.entries, 2);
+        assert_eq!(stats.total_bytes, 50);
+        assert_eq!(stats.max_bytes, 100);
+        assert!((stats.memory_utilization - 0.5).abs() < 0.01);
     }
 }

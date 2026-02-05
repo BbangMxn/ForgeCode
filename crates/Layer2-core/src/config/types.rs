@@ -542,30 +542,32 @@ mod tests {
         let json = r#"{
             "security": {
                 "env": {
-                    "blockedPatterns": ["AWS_*", "*_TOKEN", "*_SECRET"],
-                    "allowedPatterns": ["PATH", "HOME"]
+                    "blocked": ["AWS_*", "*_TOKEN", "*_SECRET"],
+                    "allowed": ["PATH", "HOME"]
                 },
-                "path": {
-                    "allowedPaths": ["/home/user/project"],
-                    "blockedPaths": ["/etc", "/root"]
+                "paths": {
+                    "allowed": ["/home/user/project"],
+                    "denied": ["/etc", "/root"]
                 }
             }
         }"#;
 
         let config: ForgeConfig = serde_json::from_str(json).unwrap();
-        assert_eq!(config.security.env.blocked_patterns.len(), 3);
-        assert_eq!(config.security.env.allowed_patterns.len(), 2);
-        assert_eq!(config.security.path.blocked_paths.len(), 2);
+        assert_eq!(config.security.env.blocked.len(), 3);
+        assert_eq!(config.security.env.allowed.len(), 2);
+        assert_eq!(config.security.paths.denied.len(), 2);
     }
 
     #[test]
     fn test_security_env_filter() {
-        use super::workflow::EnvSecurityConfig;
+        use crate::config::workflow::EnvSecurityConfig;
 
         let security = EnvSecurityConfig {
-            blocked_patterns: vec!["AWS_*".to_string(), "*_TOKEN".to_string()],
-            allowed_patterns: vec!["PATH".to_string()],
+            blocked: vec!["AWS_*".to_string(), "*_TOKEN".to_string()],
+            allowed: vec!["PATH".to_string()],
             mask_in_output: true,
+            warn_on_access: true,
+            mask_char: "*".to_string(),
         };
 
         // 차단된 패턴

@@ -52,14 +52,58 @@ pub mod hook;
 pub mod provider_bridge;
 pub mod steering;
 
-// Legacy modules (kept for compatibility, may be removed later)
+// Performance optimization
+pub mod parallel;
+
+// Long-running agent support (Claude Code style)
+pub mod todo;
+pub mod progress;
+
+// Research-based enhancements (2025)
+// Based on: AI Agentic Programming Survey, ReAct, SWE-agent, OpenDevin
+pub mod feedback;   // Feedback loop system (auto-retry on failure)
+pub mod react;      // ReAct pattern (Thought-Action-Observation)
+pub mod memory;     // Agent memory system (RAG, semantic search)
+
+// ============================================================================
+// Legacy Modules (Deprecated)
+// ============================================================================
+//
+// 다음 모듈들은 레거시 코드로, 새로운 시스템으로 대체되었습니다.
+// 하위 호환성을 위해 유지되지만, 새 코드에서는 사용하지 마세요.
+//
+// Migration Guide:
+// - optimizer -> forge_foundation::cache (Layer1) 또는 compressor (이 크레이트)
+// - runtime, strategy, variant -> agent 모듈의 새 시스템 사용
+// - bench -> 별도 벤치마크 도구로 이동 예정
+
+/// Context optimization module (deprecated)
+///
+/// **Deprecated**: Use `forge_foundation::cache::ContextCompactor` for context
+/// management or `crate::compressor` for LLM-based compression.
+#[deprecated(
+    since = "0.2.0",
+    note = "Use forge_foundation::cache::ContextCompactor or crate::compressor instead"
+)]
 pub mod optimizer;
 
-// Legacy modular agent system (to be deprecated)
-// These are kept for now but the new simplified system is preferred
+/// Legacy modular agent system (deprecated)
+///
+/// **Deprecated**: Use the new simplified agent system in `crate::agent`.
+#[deprecated(since = "0.2.0", note = "Use crate::agent::Agent instead")]
+#[allow(deprecated)]
 pub mod bench;
+
+#[deprecated(since = "0.2.0", note = "Use crate::agent::Agent instead")]
+#[allow(deprecated)]
 pub mod runtime;
+
+#[deprecated(since = "0.2.0", note = "Use crate::agent::Agent instead")]
+#[allow(deprecated)]
 pub mod strategy;
+
+#[deprecated(since = "0.2.0", note = "Use crate::agent::Agent instead")]
+#[allow(deprecated)]
 pub mod variant;
 
 // ============================================================================
@@ -79,7 +123,7 @@ pub use hook::{
 // Compressor
 pub use compressor::{
     CompressionResult, CompressionStats, CompressorConfig, ContextCompressor, LlmCompressor,
-    SmartCompressor,
+    SmartCompressor, TokenUsageInfo,
 };
 
 // Steering
@@ -93,22 +137,41 @@ pub use provider_bridge::{build_provider_registry, ForgeNativeProvider};
 
 // Recovery
 pub use recovery::{
-    EditConflictRecovery, ErrorRecovery, FileNotFoundRecovery, PermissionDeniedRecovery,
-    RateLimitRecovery, RecoveryAction, RecoveryContext, RecoveryStrategy, TimeoutRecovery,
-    ToolError,
+    ErrorRecovery, FileNotFoundRecovery, NetworkErrorRecovery,
+    RateLimitRecovery, RecoveryAction, RecoveryContext, RecoveryStrategy, 
+    RecoverableError, TimeoutRecovery,
 };
 
-// Optimizer (legacy, for context management)
+// Long-running agent support (Claude Code style)
+pub use todo::{TodoItem, TodoManager, TodoStats, TodoStatus, Priority};
+pub use progress::{ProgressTracker, ProgressEntry, ProgressAction, Feature, FeatureList};
+
+// Research-based enhancements (2025)
+pub use feedback::{Feedback, FeedbackAnalyzer, FeedbackLoop, FeedbackType, RetryStrategy};
+pub use react::{ReactExample, ReactPromptBuilder, ReactStep, ReactSummary, ReactTrace, ReactTracer};
+pub use memory::{AgentMemory, LongTermMemory, MemoryEntry, MemoryMetadata, MemoryType, SemanticSearch, ShortTermMemory};
+
+// ============================================================================
+// Legacy Exports (Deprecated)
+// ============================================================================
+
+// Optimizer exports (deprecated)
+// 주의: 이 타입들은 forge_foundation::cache로 마이그레이션하세요
+#[allow(deprecated)]
 pub use optimizer::{
-    estimate_tokens, ContextCompactor, ContextMessage, ContextOptimizer, ContextOptimizerConfig,
-    MessageImportance, OptimizationResult, OptimizerStats,
+    estimate_tokens, ContextCompactor as LegacyContextCompactor, ContextMessage,
+    ContextOptimizer, ContextOptimizerConfig, MessageImportance, OptimizationResult, OptimizerStats,
 };
 
-// ============================================================================
-// Legacy Exports (Deprecated - use new system instead)
-// ============================================================================
+// 하위 호환성을 위한 alias (deprecated)
+#[deprecated(
+    since = "0.2.0",
+    note = "Use forge_foundation::cache::ContextCompactor instead"
+)]
+pub type ContextCompactor = optimizer::ContextCompactor;
 
 // Runtime exports (deprecated)
+#[allow(deprecated)]
 pub use runtime::{
     AgentCapability, AgentMetadata, AgentPhase, AgentRuntime, AgentRuntimeExt, ExecuteOutput,
     LifecycleEvent, LifecycleObserver, PlanOutput, ReflectOutput, RuntimeConfig, RuntimeContext,
@@ -116,6 +179,7 @@ pub use runtime::{
 };
 
 // Strategy exports (deprecated)
+#[allow(deprecated)]
 pub use strategy::{
     AdaptiveExecution, ChainOfThought, ExecutionStrategy, HierarchicalPlanning, MemoryStrategy,
     ParallelExecution, PlanningStrategy, RAGMemory, ReActReasoning, ReasoningStrategy,
@@ -135,4 +199,11 @@ pub mod prelude {
     pub use crate::hook::{AgentHook, HookManager, HookResult, LoggingHook};
     pub use crate::provider_bridge::{build_provider_registry, ForgeNativeProvider};
     pub use crate::steering::{SteeringHandle, SteeringQueue};
+    // Long-running agent support
+    pub use crate::todo::{TodoManager, TodoItem, Priority};
+    pub use crate::progress::{ProgressTracker, FeatureList};
+    // Research-based enhancements
+    pub use crate::feedback::{FeedbackLoop, FeedbackAnalyzer, RetryStrategy};
+    pub use crate::react::{ReactTracer, ReactPromptBuilder};
+    pub use crate::memory::AgentMemory;
 }

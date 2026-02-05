@@ -8,8 +8,8 @@ mod limits;
 
 // Forge (통합 설정)
 pub use forge::{
-    AutoSaveConfig, CustomColors, EditorConfig, ExperimentalConfig, ForgeConfig, ThemeConfig,
-    FORGE_CONFIG_FILE,
+    AutoSaveConfig, CacheSettings, CustomColors, EditorConfig, ExperimentalConfig, ForgeConfig,
+    GitConfig, SecurityConfig, ThemeConfig, FORGE_CONFIG_FILE,
 };
 
 // Limits

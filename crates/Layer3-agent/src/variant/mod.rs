@@ -29,11 +29,17 @@
 //! - **TreeSearchAgent**: Tree-of-Thought 탐색
 //! - **ComposableAgent**: 사용자 정의 전략 조합
 
+#[allow(deprecated)]
 mod builder;
+#[allow(deprecated)]
 mod classic;
+#[allow(deprecated)]
 mod react;
+#[allow(deprecated)]
 mod reflexion;
+#[allow(deprecated)]
 mod registry;
+#[allow(deprecated)]
 mod tree_search;
 
 pub use builder::AgentBuilder;

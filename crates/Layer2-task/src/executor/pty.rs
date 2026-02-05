@@ -4,6 +4,7 @@
 //! - Interactive command execution (vim, htop, etc.)
 //! - Proper ANSI escape sequence handling
 //! - Terminal environment emulation
+//! - **Background execution** for long-running servers
 //!
 //! This executor bridges Layer2-tool's ForgeCmd with Layer2-task.
 //!
@@ -13,9 +14,18 @@
 //! - Blocked patterns (e.g., `AWS_*`, `*_TOKEN`) are removed before execution
 //! - Allowed patterns take precedence over blocked patterns
 //! - Sensitive values can be masked in output
+//!
+//! ## Background Execution
+//!
+//! For long-running processes (servers, watch commands), use `spawn_background`:
+//! - Returns immediately after process starts
+//! - Logs are collected asynchronously in background
+//! - Use `get_logs()` to retrieve output
+//! - Use `force_kill()` to terminate
 
 use crate::executor::Executor;
 use crate::log::{LogEntry, TaskLogManager};
+use crate::state::TaskState;
 use crate::task::{Task, TaskResult};
 use async_trait::async_trait;
 use forge_foundation::{Error, Result};
@@ -23,10 +33,11 @@ use portable_pty::{native_pty_system, CommandBuilder, PtyPair, PtySize};
 use std::collections::HashMap;
 use std::io::Read;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::{Mutex, RwLock};
-use tracing::{debug, error, info};
+use tokio::sync::{mpsc, Mutex, RwLock};
+use tracing::{debug, error, info, warn};
 
 /// PTY size configuration
 #[derive(Debug, Clone, Copy)]
@@ -45,7 +56,6 @@ impl Default for PtySizeConfig {
 }
 
 /// PTY session state
-#[allow(dead_code)]
 struct PtySessionState {
     /// PTY pair (master + slave)
     pty: Option<PtyPair>,
@@ -56,11 +66,23 @@ struct PtySessionState {
     /// Task ID
     task_id: String,
 
+    /// Command being executed
+    command: String,
+
     /// Start time
     started_at: Instant,
 
     /// Kill requested flag
-    kill_requested: bool,
+    kill_requested: Arc<AtomicBool>,
+
+    /// Task status
+    status: TaskState,
+
+    /// Exit code (set when process completes)
+    exit_code: Option<i32>,
+
+    /// Background log collector handle
+    log_collector_handle: Option<tokio::task::JoinHandle<()>>,
 }
 
 /// Environment security configuration for PTY
@@ -325,7 +347,8 @@ impl PtyExecutor {
 
         if let Some(session) = session {
             let mut state = session.lock().await;
-            state.kill_requested = true;
+            state.kill_requested.store(true, Ordering::SeqCst);
+            state.status = TaskState::Cancelled;
 
             if let Some(ref mut child) = state.child {
                 if let Err(e) = child.kill() {
@@ -334,13 +357,293 @@ impl PtyExecutor {
                 }
             }
 
+            // Cancel the log collector if running
+            if let Some(handle) = state.log_collector_handle.take() {
+                handle.abort();
+            }
+
             self.log_manager
                 .push_system(task_id, "PTY process forcefully terminated")
                 .await;
+            self.log_manager.mark_ended(task_id).await;
             info!("Force killed PTY session {}", task_id);
         }
 
+        // Remove from sessions
+        {
+            let mut sessions = self.sessions.write().await;
+            sessions.remove(task_id);
+        }
+
         Ok(())
+    }
+
+    /// Get task status
+    pub async fn get_status(&self, task_id: &str) -> Option<TaskState> {
+        let sessions = self.sessions.read().await;
+        if let Some(session) = sessions.get(task_id) {
+            let state = session.lock().await;
+            Some(state.status.clone())
+        } else {
+            None
+        }
+    }
+
+    /// Check if a task has completed
+    pub async fn is_completed(&self, task_id: &str) -> bool {
+        if let Some(status) = self.get_status(task_id).await {
+            status.is_terminal()
+        } else {
+            true // Not found = completed/cleaned up
+        }
+    }
+
+    /// Get exit code for a completed task
+    pub async fn get_exit_code(&self, task_id: &str) -> Option<i32> {
+        let sessions = self.sessions.read().await;
+        if let Some(session) = sessions.get(task_id) {
+            let state = session.lock().await;
+            state.exit_code
+        } else {
+            None
+        }
+    }
+
+    /// Spawn a task in background (returns immediately)
+    /// Use get_logs() to retrieve output, force_kill() to terminate
+    pub async fn spawn_background(&self, task: &Task) -> Result<()> {
+        let task_id = task.id.to_string();
+        let pty_system = native_pty_system();
+
+        // Create PTY
+        let size = PtySize {
+            rows: self.config.pty_size.rows,
+            cols: self.config.pty_size.cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
+
+        let pty = pty_system
+            .openpty(size)
+            .map_err(|e| Error::Task(format!("Failed to open PTY: {}", e)))?;
+
+        // Build command - use appropriate shell flag for platform
+        let mut cmd = CommandBuilder::new(&self.config.shell);
+        if cfg!(windows) {
+            // PowerShell uses -Command, not -c
+            cmd.arg("-Command");
+        } else {
+            cmd.arg("-c");
+        }
+        cmd.arg(&task.command);
+
+        // Set working directory if provided
+        if let Some(cwd_value) = task.input.get("cwd") {
+            if let Some(cwd_str) = cwd_value.as_str() {
+                cmd.cwd(PathBuf::from(cwd_str));
+            }
+        } else if let Some(cwd_value) = task.input.get("working_dir") {
+            if let Some(cwd_str) = cwd_value.as_str() {
+                cmd.cwd(PathBuf::from(cwd_str));
+            }
+        }
+
+        // Set environment
+        for (key, value) in self.build_env() {
+            cmd.env(key, value);
+        }
+
+        // Add task-specific environment
+        for (key, value) in &task.env {
+            cmd.env(key, value);
+        }
+
+        // Create log buffer
+        let _log_rx = self
+            .log_manager
+            .create_buffer(&task_id, Some(&task.command))
+            .await;
+
+        info!("Spawning background PTY task {}: {}", task_id, task.command);
+
+        // Spawn child process
+        let child = pty
+            .slave
+            .spawn_command(cmd)
+            .map_err(|e| Error::Task(format!("Failed to spawn PTY command: {}", e)))?;
+
+        // Get reader for log collection
+        let reader = pty
+            .master
+            .try_clone_reader()
+            .map_err(|e| Error::Task(format!("Failed to clone PTY reader: {}", e)))?;
+
+        let kill_requested = Arc::new(AtomicBool::new(false));
+
+        // Store session state
+        let session_state = Arc::new(Mutex::new(PtySessionState {
+            pty: Some(pty),
+            child: Some(child),
+            task_id: task_id.clone(),
+            command: task.command.clone(),
+            started_at: Instant::now(),
+            kill_requested: Arc::clone(&kill_requested),
+            status: TaskState::Running,
+            exit_code: None,
+            log_collector_handle: None,
+        }));
+
+        // Spawn background log collector
+        let log_manager = Arc::clone(&self.log_manager);
+        let task_id_clone = task_id.clone();
+        let session_clone = Arc::clone(&session_state);
+        let timeout = task.timeout;
+        let env_security = self.config.env_security.clone();
+        let system_env = self.get_system_env();
+
+        let log_handle = tokio::spawn(async move {
+            Self::background_log_collector(
+                reader,
+                log_manager,
+                task_id_clone,
+                session_clone,
+                timeout,
+                kill_requested,
+                env_security,
+                system_env,
+            )
+            .await;
+        });
+
+        // Store the handle
+        {
+            let mut state = session_state.lock().await;
+            state.log_collector_handle = Some(log_handle);
+        }
+
+        // Add to sessions
+        {
+            let mut sessions = self.sessions.write().await;
+            sessions.insert(task_id.clone(), session_state);
+        }
+
+        info!("Background PTY task {} started successfully", task_id);
+        Ok(())
+    }
+
+    /// Background log collector task
+    async fn background_log_collector(
+        mut reader: Box<dyn Read + Send>,
+        log_manager: Arc<TaskLogManager>,
+        task_id: String,
+        session: Arc<Mutex<PtySessionState>>,
+        timeout: Duration,
+        kill_requested: Arc<AtomicBool>,
+        env_security: PtyEnvSecurityConfig,
+        system_env: HashMap<String, String>,
+    ) {
+        let start = Instant::now();
+        let mut buf = [0u8; 4096];
+        let mut accumulated_output = String::new();
+
+        // Use spawn_blocking for the synchronous read operations
+        let (tx, mut rx) = mpsc::channel::<Vec<u8>>(100);
+
+        let reader_handle = tokio::task::spawn_blocking(move || {
+            loop {
+                if kill_requested.load(Ordering::SeqCst) {
+                    break;
+                }
+
+                match reader.read(&mut buf) {
+                    Ok(0) => break, // EOF
+                    Ok(n) => {
+                        let chunk = buf[..n].to_vec();
+                        if tx.blocking_send(chunk).is_err() {
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        if e.kind() == std::io::ErrorKind::WouldBlock {
+                            std::thread::sleep(Duration::from_millis(10));
+                            continue;
+                        }
+                        break;
+                    }
+                }
+            }
+        });
+
+        // Process incoming output
+        loop {
+            tokio::select! {
+                chunk = rx.recv() => {
+                    match chunk {
+                        Some(data) => {
+                            let text = String::from_utf8_lossy(&data);
+                            let clean_text = strip_ansi(&text);
+                            let masked_text = env_security.mask_output(&clean_text, &system_env);
+
+                            accumulated_output.push_str(&masked_text);
+                            log_manager.push_stdout(&task_id, &masked_text).await;
+                        }
+                        None => break, // Channel closed
+                    }
+                }
+                _ = tokio::time::sleep(Duration::from_millis(100)) => {
+                    // Check timeout
+                    if start.elapsed() > timeout {
+                        warn!("PTY task {} timed out after {:?}", task_id, timeout);
+                        let mut state = session.lock().await;
+                        state.status = TaskState::Timeout;
+                        state.kill_requested.store(true, Ordering::SeqCst);
+                        if let Some(ref mut child) = state.child {
+                            let _ = child.kill();
+                        }
+                        log_manager.push_system(&task_id, "Task timed out").await;
+                        break;
+                    }
+
+                    // Check if process has exited
+                    let mut state = session.lock().await;
+                    if let Some(ref mut child) = state.child {
+                        match child.try_wait() {
+                            Ok(Some(status)) => {
+                                let exit_code = status.exit_code() as i32;
+                                state.exit_code = Some(exit_code);
+                                state.status = if exit_code == 0 {
+                                    TaskState::Completed(TaskResult::success(accumulated_output.clone()))
+                                } else {
+                                    TaskState::Failed(format!("Exit code: {}", exit_code))
+                                };
+                                info!("PTY task {} completed with exit code {}", task_id, exit_code);
+                                break;
+                            }
+                            Ok(None) => {
+                                // Still running
+                            }
+                            Err(e) => {
+                                error!("Error checking process status: {}", e);
+                                state.status = TaskState::Failed(e.to_string());
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Wait for reader to finish
+        let _ = reader_handle.await;
+
+        // Mark log as ended
+        log_manager.mark_ended(&task_id).await;
+
+        // Update final status
+        let mut state = session.lock().await;
+        if matches!(state.status, TaskState::Running) {
+            state.status = TaskState::Completed(TaskResult::success(accumulated_output));
+        }
     }
 
     /// Get logs for a task
@@ -375,7 +678,8 @@ impl PtyExecutor {
         std::env::vars().collect()
     }
 
-    /// Execute command in PTY
+    /// Execute command in PTY (synchronous - waits for completion)
+    /// For long-running processes, use spawn_background() instead
     async fn execute_in_pty(&self, task: &Task) -> Result<TaskResult> {
         let task_id = task.id.to_string();
         let pty_system = native_pty_system();
@@ -392,9 +696,14 @@ impl PtyExecutor {
             .openpty(size)
             .map_err(|e| Error::Task(format!("Failed to open PTY: {}", e)))?;
 
-        // Build command
+        // Build command - use appropriate shell flag for platform
         let mut cmd = CommandBuilder::new(&self.config.shell);
-        cmd.arg("-c");
+        if cfg!(windows) {
+            // PowerShell uses -Command, not -c
+            cmd.arg("-Command");
+        } else {
+            cmd.arg("-c");
+        }
         cmd.arg(&task.command);
 
         // Set working directory if provided in input
@@ -402,10 +711,19 @@ impl PtyExecutor {
             if let Some(cwd_str) = cwd_value.as_str() {
                 cmd.cwd(PathBuf::from(cwd_str));
             }
+        } else if let Some(cwd_value) = task.input.get("working_dir") {
+            if let Some(cwd_str) = cwd_value.as_str() {
+                cmd.cwd(PathBuf::from(cwd_str));
+            }
         }
 
         // Set environment
         for (key, value) in self.build_env() {
+            cmd.env(key, value);
+        }
+
+        // Add task-specific environment
+        for (key, value) in &task.env {
             cmd.env(key, value);
         }
 
@@ -429,13 +747,19 @@ impl PtyExecutor {
             .try_clone_reader()
             .map_err(|e| Error::Task(format!("Failed to clone PTY reader: {}", e)))?;
 
+        let kill_requested = Arc::new(AtomicBool::new(false));
+
         // Store session state
         let session_state = Arc::new(Mutex::new(PtySessionState {
             pty: Some(pty),
             child: Some(child),
             task_id: task_id.clone(),
+            command: task.command.clone(),
             started_at: Instant::now(),
-            kill_requested: false,
+            kill_requested: Arc::clone(&kill_requested),
+            status: TaskState::Running,
+            exit_code: None,
+            log_collector_handle: None,
         }));
 
         {
@@ -444,9 +768,8 @@ impl PtyExecutor {
         }
 
         // Collect output with timeout
-        let _log_manager = Arc::clone(&self.log_manager);
-        let _task_id_clone = task_id.clone();
         let timeout_duration = task.timeout;
+        let kill_flag = Arc::clone(&kill_requested);
 
         let output_handle = tokio::task::spawn_blocking(move || {
             let mut output = Vec::new();
@@ -454,7 +777,7 @@ impl PtyExecutor {
             let start = Instant::now();
 
             loop {
-                if start.elapsed() > timeout_duration {
+                if start.elapsed() > timeout_duration || kill_flag.load(Ordering::SeqCst) {
                     break;
                 }
 
@@ -463,13 +786,6 @@ impl PtyExecutor {
                     Ok(n) => {
                         let chunk = &buf[..n];
                         output.extend_from_slice(chunk);
-
-                        // Stream to log (strip ANSI for log)
-                        let text = String::from_utf8_lossy(chunk);
-                        let clean_text = strip_ansi(&text);
-                        // Note: We can't use async here, so output will be collected
-                        // and pushed to log after completion
-                        let _ = clean_text; // Log streaming handled separately
                     }
                     Err(e) => {
                         if e.kind() == std::io::ErrorKind::WouldBlock {
@@ -507,7 +823,9 @@ impl PtyExecutor {
             } else {
                 -1
             };
-            (exit_code, state.kill_requested)
+            state.exit_code = Some(exit_code);
+            // Don't set full status here, will be set after output processing
+            (exit_code, state.kill_requested.load(Ordering::SeqCst))
         };
 
         // Cleanup session
@@ -520,7 +838,7 @@ impl PtyExecutor {
         let stdout = String::from_utf8_lossy(&output).to_string();
         let stdout_clean = strip_ansi(&stdout);
 
-        // Mask sensitive values in output (e.g., if a secret was somehow echoed)
+        // Mask sensitive values in output
         let system_env = self.get_system_env();
         let stdout_masked = self
             .config
@@ -536,6 +854,53 @@ impl PtyExecutor {
         }
 
         Ok(TaskResult::with_exit_code(stdout_masked, exit_code))
+    }
+
+    /// Wait for a background task to complete
+    pub async fn wait_for_completion(&self, task_id: &str, timeout: Duration) -> Result<TaskState> {
+        let start = Instant::now();
+
+        loop {
+            if start.elapsed() > timeout {
+                return Err(Error::Task("Wait timeout exceeded".to_string()));
+            }
+
+            if let Some(status) = self.get_status(task_id).await {
+                if status.is_terminal() {
+                    return Ok(status);
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            } else {
+                // Task not found - assume completed/cleaned up
+                return Ok(TaskState::Completed(TaskResult::success(String::new())));
+            }
+        }
+    }
+
+    /// Wait for output to contain a specific pattern
+    pub async fn wait_for_output(&self, task_id: &str, pattern: &str, timeout: Duration) -> Result<bool> {
+        let start = Instant::now();
+
+        loop {
+            if start.elapsed() > timeout {
+                return Ok(false);
+            }
+
+            // Check logs for pattern
+            let logs = self.get_logs(task_id, None).await;
+            for entry in &logs {
+                if entry.content.contains(pattern) {
+                    return Ok(true);
+                }
+            }
+
+            // Check if task has ended without match
+            if self.is_completed(task_id).await {
+                return Ok(false);
+            }
+
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
     }
 }
 

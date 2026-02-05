@@ -283,6 +283,24 @@ impl ProviderConfig {
         self.default = Some(name.into());
     }
 
+    /// API 키 설정 (CLI에서 직접 전달 시 사용)
+    pub fn set_api_key(&mut self, provider_name: &str, api_key: &str) {
+        if let Some(provider) = self.providers.get_mut(provider_name) {
+            provider.api_key = Some(api_key.to_string());
+        } else {
+            // 프로바이더가 없으면 기본 설정으로 추가
+            let provider_type = match provider_name {
+                "anthropic" => ProviderType::Anthropic,
+                "openai" => ProviderType::Openai,
+                "gemini" => ProviderType::Gemini,
+                "ollama" => ProviderType::Ollama,
+                _ => ProviderType::Anthropic, // 기본값
+            };
+            let provider = Provider::new(provider_type).api_key(api_key.to_string());
+            self.add(provider_name, provider);
+        }
+    }
+
     /// 프로바이더 제거
     pub fn remove(&mut self, name: &str) -> Option<Provider> {
         let removed = self.providers.remove(name);

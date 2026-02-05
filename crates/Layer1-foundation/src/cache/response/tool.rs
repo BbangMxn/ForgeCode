@@ -9,13 +9,20 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use crate::cache::util::{hash_json, LruCache};
+use crate::cache::util::{hash_json, LruCache, LruCacheConfig};
 
 /// Configuration for tool caching
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCacheConfig {
     /// Maximum number of entries
     pub max_entries: usize,
+    /// Maximum total memory in bytes (0 = unlimited)
+    #[serde(default)]
+    pub max_bytes: usize,
+    /// Maximum size per entry in bytes (0 = unlimited)
+    /// Entries larger than this will not be cached
+    #[serde(default)]
+    pub max_entry_bytes: usize,
     /// List of cacheable tool names
     pub cacheable_tools: Vec<String>,
     /// Enable file-based invalidation
@@ -26,6 +33,35 @@ impl Default for ToolCacheConfig {
     fn default() -> Self {
         Self {
             max_entries: 100,
+            max_bytes: 10 * 1024 * 1024, // 10 MB default
+            max_entry_bytes: 1024 * 1024, // 1 MB per entry default
+            cacheable_tools: vec!["Read".to_string(), "Glob".to_string(), "Grep".to_string()],
+            enable_file_invalidation: true,
+        }
+    }
+}
+
+impl ToolCacheConfig {
+    /// Create config with custom memory limits
+    pub fn with_memory_limits(
+        max_entries: usize,
+        max_bytes: usize,
+        max_entry_bytes: usize,
+    ) -> Self {
+        Self {
+            max_entries,
+            max_bytes,
+            max_entry_bytes,
+            ..Default::default()
+        }
+    }
+
+    /// Create a minimal config for memory-constrained environments
+    pub fn minimal() -> Self {
+        Self {
+            max_entries: 50,
+            max_bytes: 5 * 1024 * 1024, // 5 MB
+            max_entry_bytes: 512 * 1024, // 512 KB
             cacheable_tools: vec!["Read".to_string(), "Glob".to_string(), "Grep".to_string()],
             enable_file_invalidation: true,
         }
@@ -122,9 +158,14 @@ impl ToolCache {
     /// Create a tool cache with custom configuration
     pub fn with_config(config: ToolCacheConfig) -> Self {
         let cacheable_tools: HashSet<String> = config.cacheable_tools.iter().cloned().collect();
+        let lru_config = LruCacheConfig::with_limits(
+            config.max_entries,
+            config.max_bytes,
+            config.max_entry_bytes,
+        );
 
         Self {
-            cache: LruCache::new(config.max_entries),
+            cache: LruCache::with_config(lru_config),
             cacheable_tools,
             file_to_keys: std::collections::HashMap::new(),
             hits: 0,
@@ -236,6 +277,13 @@ impl ToolCache {
         } else {
             0.0
         };
+        let memory_bytes = self.cache.current_bytes();
+        let max_memory = self.config.max_bytes;
+        let memory_utilization = if max_memory > 0 {
+            memory_bytes as f64 / max_memory as f64
+        } else {
+            0.0
+        };
 
         ToolCacheStats {
             entries: self.cache.len(),
@@ -243,8 +291,20 @@ impl ToolCache {
             hits: self.hits,
             misses: self.misses,
             hit_rate,
-            memory_bytes: self.cache.estimated_memory_bytes(),
+            memory_bytes,
+            max_memory_bytes: max_memory,
+            memory_utilization,
         }
+    }
+
+    /// Check if cache is at memory limit
+    pub fn is_at_memory_limit(&self) -> bool {
+        self.cache.is_at_memory_limit()
+    }
+
+    /// Get current memory usage in bytes
+    pub fn memory_bytes(&self) -> usize {
+        self.cache.current_bytes()
     }
 
     /// Get the number of cached entries
@@ -267,6 +327,8 @@ pub struct ToolCacheStats {
     pub misses: u64,
     pub hit_rate: f64,
     pub memory_bytes: usize,
+    pub max_memory_bytes: usize,
+    pub memory_utilization: f64,
 }
 
 #[cfg(test)]

@@ -48,6 +48,7 @@
 
 pub mod builtin;
 mod context;
+pub mod parallel;
 mod registry;
 pub mod security;
 
@@ -71,3 +72,6 @@ pub use registry::{
 
 // Re-exports: Security
 pub use security::{is_safe_extension, is_sensitive_path, PathValidation, PathValidator};
+
+// Re-exports: Parallel execution
+pub use parallel::{ParallelToolExecutor, ToolCall, ToolExecutionResult};

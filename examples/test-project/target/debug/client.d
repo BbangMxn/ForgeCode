@@ -1,0 +1,1 @@
+C:\Users\jixso\Desktop\zed\ForgeCode\examples\test-project\target\debug\client.exe: C:\Users\jixso\Desktop\zed\ForgeCode\examples\test-project\src\client.rs C:\Users\jixso\Desktop\zed\ForgeCode\examples\test-project\src\lib.rs

@@ -4,6 +4,7 @@
 //! - `service`: 런타임 권한 관리 (PermissionService)
 //! - `settings`: JSON 설정 저장/로드 (PermissionSettings)
 //! - `security`: 위험 명령어/민감 경로 분석 (CommandAnalyzer, PathAnalyzer)
+//! - `oversight`: 다중 에이전트 보안 감독 (OversightAgent)
 //!
 //! ## 사용 예시
 //!
@@ -31,6 +32,7 @@
 //! }
 //! ```
 
+pub mod oversight;
 pub mod security;
 mod service;
 mod settings;
@@ -66,4 +68,10 @@ pub use types::{
 pub use security::{
     analyzer as command_analyzer, path_analyzer, CommandAnalysis, CommandAnalyzer, CommandRisk,
     PathAnalyzer, SensitivePath,
+};
+
+// Oversight (다중 에이전트 보안 감독)
+pub use oversight::{
+    AuditEntry, OversightAgent, OversightConfig, OversightStats, RiskPattern,
+    SourceAnalyzer, SourceContext, SourceTag, ToolCallRequest, ValidationResult,
 };

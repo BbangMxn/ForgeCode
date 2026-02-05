@@ -88,6 +88,10 @@ pub struct Task {
     /// Timeout duration
     pub timeout: Duration,
 
+    /// Environment variables for this task
+    #[serde(default)]
+    pub env: std::collections::HashMap<String, String>,
+
     /// When the task was created
     pub created_at: DateTime<Utc>,
 
@@ -118,11 +122,24 @@ impl Task {
             state: TaskState::Pending,
             execution_mode: ExecutionMode::default(),
             timeout: Duration::from_secs(120),
+            env: std::collections::HashMap::new(),
             created_at: Utc::now(),
             started_at: None,
             completed_at: None,
             container_id: None,
         }
+    }
+
+    /// Add environment variables
+    pub fn with_env(mut self, env: std::collections::HashMap<String, String>) -> Self {
+        self.env = env;
+        self
+    }
+
+    /// Add a single environment variable
+    pub fn with_env_var(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.env.insert(key.into(), value.into());
+        self
     }
 
     /// Set execution mode

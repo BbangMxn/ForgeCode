@@ -26,10 +26,11 @@
 //! → Return Response
 //! ```
 
-use crate::compressor::{CompressionResult, CompressorConfig, ContextCompressor};
+use crate::compressor::{CompressorConfig, ContextCompressor};
 use crate::context::AgentContext;
 use crate::history::MessageHistory;
 use crate::hook::{AgentHook, HookManager, HookResult, ToolResult, TurnInfo};
+use crate::parallel::ExecutionPlanner;
 use crate::recovery::{ErrorRecovery, RecoveryAction, RecoveryContext};
 use crate::steering::{AgentState, Steerable, SteeringChecker, SteeringHandle, SteeringQueue};
 use forge_foundation::{Error, Result};
@@ -122,6 +123,10 @@ pub struct AgentConfig {
 
     /// 스트리밍 활성화
     pub streaming: bool,
+
+    /// 병렬 도구 실행 활성화
+    /// read, glob, grep 등 독립적인 도구들을 동시에 실행
+    pub parallel_tools: bool,
 }
 
 impl Default for AgentConfig {
@@ -131,6 +136,7 @@ impl Default for AgentConfig {
             compressor_config: CompressorConfig::claude_code_style(),
             auto_compress: true,
             streaming: true,
+            parallel_tools: true, // 기본 활성화
         }
     }
 }
@@ -143,6 +149,7 @@ impl AgentConfig {
             compressor_config: CompressorConfig::aggressive(),
             auto_compress: true,
             streaming: true,
+            parallel_tools: true,
         }
     }
 
@@ -153,6 +160,15 @@ impl AgentConfig {
             compressor_config: CompressorConfig::conservative(),
             auto_compress: true,
             streaming: true,
+            parallel_tools: true,
+        }
+    }
+
+    /// 순차 실행 (디버깅용)
+    pub fn sequential() -> Self {
+        Self {
+            parallel_tools: false,
+            ..Self::default()
         }
     }
 }
@@ -293,11 +309,11 @@ impl Agent {
             _ => {}
         }
 
-        let mut full_response = String::new();
+        let mut full_response = String::with_capacity(4096); // Pre-allocate typical response size
         let mut turn = 0u32;
         let mut total_input_tokens = 0u32;
         let mut total_output_tokens = 0u32;
-        let mut tools_used = Vec::new();
+        let mut tools_used = Vec::with_capacity(8); // Typical tool count
 
         loop {
             // Check max iterations
@@ -382,15 +398,14 @@ impl Agent {
             steering.set_state(AgentState::WaitingForLlm).await;
 
             // Get tool definitions
-            let tools = self.ctx.tool_definitions();
+            let tools = self.ctx.tool_definitions().await;
 
             // Get provider and create stream
+            // Note: to_messages() currently clones, but provider API requires ownership
+            // TODO: Consider modifying Provider trait to accept &[Message] for zero-copy
             let provider = self.ctx.gateway.get_default_provider_for_stream().await?;
-            let stream = provider.stream(
-                history.to_messages(),
-                tools,
-                history.system_prompt().map(|s| s.to_string()),
-            );
+            let system_prompt = history.system_prompt().map(String::from);
+            let stream = provider.stream(history.to_messages(), tools, system_prompt);
 
             // Process stream
             let (response_text, tool_calls, usage) = self.process_stream(stream, &event_tx).await?;
@@ -430,58 +445,14 @@ impl Agent {
             history.add_assistant_with_tools(&response_text, tool_calls.clone());
             steering.set_state(AgentState::ExecutingTool).await;
 
-            // Execute tool calls sequentially (like Claude Code / Gemini CLI)
-            for tool_call in tool_calls {
-                // Check steering before each tool
-                steering.process_commands().await;
-                if steering.should_stop() {
-                    break;
-                }
+            // Execute tool calls (parallel or sequential based on config)
+            let tool_results = self
+                .execute_tools(session_id, &tool_calls, history, &event_tx, &mut tools_used)
+                .await?;
 
-                // Run before_tool hook
-                match self.hooks.run_before_tool(&tool_call, history).await? {
-                    HookResult::Stop { reason } => {
-                        let _ = event_tx.send(AgentEvent::Stopped { reason }).await;
-                        return Err(Error::Agent("Stopped by hook".to_string()));
-                    }
-                    HookResult::Block { response } => {
-                        // Skip this tool, use synthetic response
-                        history.add_tool_result(&tool_call.id, &response, false);
-                        continue;
-                    }
-                    _ => {}
-                }
-
-                let tool_start = Instant::now();
-                let result = self.execute_tool(session_id, &tool_call, &event_tx).await;
-                let duration_ms = tool_start.elapsed().as_millis() as u64;
-
-                // Create ToolResult for hook
-                let (content, is_error) = match &result {
-                    Ok(content) => (content.clone(), false),
-                    Err(e) => (e.to_string(), true),
-                };
-
-                let tool_result = ToolResult {
-                    tool_call_id: tool_call.id.clone(),
-                    tool_name: tool_call.name.clone(),
-                    output: content.clone(),
-                    success: !is_error,
-                    duration_ms,
-                };
-
-                // Run after_tool hook
-                self.hooks
-                    .run_after_tool(&tool_call, &tool_result, history)
-                    .await?;
-
-                // Track tools used
-                if !tools_used.contains(&tool_call.name) {
-                    tools_used.push(tool_call.name.clone());
-                }
-
-                // Add tool result to history
-                history.add_tool_result(&tool_call.id, &content, is_error);
+            // Add tool results to history
+            for (tool_call_id, content, is_error) in tool_results {
+                history.add_tool_result(&tool_call_id, &content, is_error);
             }
 
             // Run after_turn hook
@@ -524,8 +495,8 @@ impl Agent {
         stream: std::pin::Pin<Box<dyn futures::Stream<Item = StreamEvent> + Send + '_>>,
         event_tx: &mpsc::Sender<AgentEvent>,
     ) -> Result<(String, Vec<ToolCall>, Option<(u32, u32)>)> {
-        let mut response_text = String::new();
-        let mut tool_calls = Vec::new();
+        let mut response_text = String::with_capacity(2048); // Pre-allocate for typical response
+        let mut tool_calls = Vec::with_capacity(4); // Typical tool call count
         let mut usage = None;
 
         tokio::pin!(stream);
@@ -563,6 +534,205 @@ impl Agent {
         }
 
         Ok((response_text, tool_calls, usage))
+    }
+
+    /// Execute multiple tool calls with optional parallelization
+    ///
+    /// Returns Vec<(tool_call_id, content, is_error)>
+    async fn execute_tools(
+        &self,
+        session_id: &str,
+        tool_calls: &[ToolCall],
+        history: &mut MessageHistory,
+        event_tx: &mpsc::Sender<AgentEvent>,
+        tools_used: &mut Vec<String>,
+    ) -> Result<Vec<(String, String, bool)>> {
+        let steering = self.steering_checker();
+        let mut results = Vec::with_capacity(tool_calls.len());
+
+        if self.config.parallel_tools && tool_calls.len() > 1 {
+            // Use ExecutionPlanner to create optimal execution plan
+            let planner = ExecutionPlanner::new();
+            let plan = planner.plan(tool_calls.to_vec());
+
+            info!(
+                "Parallel execution: {} tools in {} phases ({} parallelizable)",
+                plan.tool_calls.len(),
+                plan.phase_count(),
+                plan.parallelizable_count()
+            );
+
+            for phase in &plan.phases {
+                // Check steering before each phase
+                steering.process_commands().await;
+                if steering.should_stop() {
+                    break;
+                }
+
+                if phase.parallel && phase.tool_indices.len() > 1 {
+                    // Execute phase tools in parallel using tokio::spawn
+                    let mut handles = Vec::with_capacity(phase.tool_indices.len());
+
+                    for &idx in &phase.tool_indices {
+                        let tool_call = &plan.tool_calls[idx];
+
+                        // Run before_tool hook (still sequential for hooks)
+                        match self.hooks.run_before_tool(tool_call, history).await? {
+                            HookResult::Stop { reason } => {
+                                let _ = event_tx.send(AgentEvent::Stopped { reason }).await;
+                                return Err(Error::Agent("Stopped by hook".to_string()));
+                            }
+                            HookResult::Block { response } => {
+                                results.push((tool_call.id.clone(), response, false));
+                                continue;
+                            }
+                            _ => {}
+                        }
+
+                        // Track tools used
+                        if !tools_used.contains(&tool_call.name) {
+                            tools_used.push(tool_call.name.clone());
+                        }
+
+                        // Spawn parallel execution
+                        let tc = tool_call.clone();
+                        let sid = session_id.to_string();
+                        let ctx = Arc::clone(&self.ctx);
+                        let tx = event_tx.clone();
+
+                        handles.push(tokio::spawn(async move {
+                            let _tool_ctx = ctx.tool_context(&sid);
+                            let start = Instant::now();
+
+                            let _ = tx
+                                .send(AgentEvent::ToolStart {
+                                    tool_name: tc.name.clone(),
+                                    tool_call_id: tc.id.clone(),
+                                })
+                                .await;
+
+                            let result = ctx.execute_tool(&tc.name, tc.arguments.clone()).await;
+                            let duration_ms = start.elapsed().as_millis() as u64;
+
+                            let (content, is_error) = match result {
+                                Ok(exec_result) if exec_result.success => {
+                                    (exec_result.output, false)
+                                }
+                                Ok(exec_result) => {
+                                    (exec_result.error.unwrap_or_else(|| exec_result.output), true)
+                                }
+                                Err(e) => (e.to_string(), true),
+                            };
+
+                            let _ = tx
+                                .send(AgentEvent::ToolComplete {
+                                    tool_name: tc.name.clone(),
+                                    tool_call_id: tc.id.clone(),
+                                    result: content.clone(),
+                                    success: !is_error,
+                                    duration_ms,
+                                })
+                                .await;
+
+                            (tc.id.clone(), tc.name.clone(), content, is_error, duration_ms)
+                        }));
+                    }
+
+                    // Collect parallel results
+                    for handle in handles {
+                        match handle.await {
+                            Ok((id, _name, content, is_error, _duration_ms)) => {
+                                // Note: We skip after_tool hook for parallel execution
+                                // This is a trade-off for parallelization performance
+                                results.push((id, content, is_error));
+                            }
+                            Err(e) => {
+                                warn!("Parallel tool task failed: {}", e);
+                            }
+                        }
+                    }
+                } else {
+                    // Sequential execution for this phase
+                    for &idx in &phase.tool_indices {
+                        let tool_call = &plan.tool_calls[idx];
+                        let (id, content, is_error) = self
+                            .execute_tool_sequential(session_id, tool_call, history, event_tx, tools_used)
+                            .await?;
+                        results.push((id, content, is_error));
+                    }
+                }
+            }
+        } else {
+            // Sequential execution (original behavior)
+            for tool_call in tool_calls {
+                let (id, content, is_error) = self
+                    .execute_tool_sequential(session_id, tool_call, history, event_tx, tools_used)
+                    .await?;
+                results.push((id, content, is_error));
+            }
+        }
+
+        Ok(results)
+    }
+
+    /// Execute a single tool sequentially with hooks
+    async fn execute_tool_sequential(
+        &self,
+        session_id: &str,
+        tool_call: &ToolCall,
+        history: &mut MessageHistory,
+        event_tx: &mpsc::Sender<AgentEvent>,
+        tools_used: &mut Vec<String>,
+    ) -> Result<(String, String, bool)> {
+        let steering = self.steering_checker();
+
+        // Check steering before each tool
+        steering.process_commands().await;
+        if steering.should_stop() {
+            return Err(Error::Agent("Stopped".to_string()));
+        }
+
+        // Run before_tool hook
+        match self.hooks.run_before_tool(tool_call, history).await? {
+            HookResult::Stop { reason } => {
+                let _ = event_tx.send(AgentEvent::Stopped { reason }).await;
+                return Err(Error::Agent("Stopped by hook".to_string()));
+            }
+            HookResult::Block { response } => {
+                return Ok((tool_call.id.clone(), response, false));
+            }
+            _ => {}
+        }
+
+        let tool_start = Instant::now();
+        let result = self.execute_tool(session_id, tool_call, event_tx).await;
+        let duration_ms = tool_start.elapsed().as_millis() as u64;
+
+        // Create ToolResult for hook
+        let (content, is_error) = match &result {
+            Ok(content) => (content.clone(), false),
+            Err(e) => (e.to_string(), true),
+        };
+
+        let tool_result = ToolResult {
+            tool_call_id: tool_call.id.clone(),
+            tool_name: tool_call.name.clone(),
+            output: content.clone(),
+            success: !is_error,
+            duration_ms,
+        };
+
+        // Run after_tool hook
+        self.hooks
+            .run_after_tool(tool_call, &tool_result, history)
+            .await?;
+
+        // Track tools used
+        if !tools_used.contains(&tool_call.name) {
+            tools_used.push(tool_call.name.clone());
+        }
+
+        Ok((tool_call.id.clone(), content, is_error))
     }
 
     /// Execute a single tool call
@@ -639,17 +809,14 @@ impl Agent {
         _tool_ctx: &dyn forge_core::ToolContext,
         _event_tx: &mpsc::Sender<AgentEvent>,
     ) -> Result<String> {
-        // Get available tools for recovery context
-        let available_tools: Vec<String> = self
-            .ctx
-            .list_tools()
-            .await
-            .into_iter()
-            .map(|(name, _)| name)
-            .collect();
-
-        let mut recovery_ctx =
-            RecoveryContext::new(&self.ctx.working_dir.to_string_lossy(), available_tools);
+        let mut recovery_ctx = RecoveryContext {
+            cwd: self.ctx.working_dir.to_string_lossy().to_string(),
+            tool_name: tool_name.to_string(),
+            original_input: arguments.clone(),
+            retry_count: 0,
+            max_retries: 3,
+            available_files: Vec::new(),
+        };
 
         let mut current_tool = tool_name.to_string();
         let mut current_args = arguments;
@@ -673,48 +840,58 @@ impl Agent {
                         current_tool, error_msg
                     );
 
+                    // Classify the error for recovery
+                    let recoverable_error = match self.error_recovery.classify_error(&current_tool, &error_msg) {
+                        Some(err) => err,
+                        None => {
+                            // Unrecognized error, give up
+                            return Err(Error::Tool(error_msg));
+                        }
+                    };
+
                     let action = self
                         .error_recovery
-                        .handle_error(&current_tool, &current_args, &error_msg, &mut recovery_ctx)
+                        .handle_error(&recoverable_error, &recovery_ctx)
                         .await;
 
                     match action {
-                        RecoveryAction::Retry { modified_input, reason } => {
-                            info!("Recovery: Retrying with modified input - {}", reason);
-                            current_args = modified_input;
+                        RecoveryAction::Retry { modified_input, delay } => {
+                            info!("Recovery: Retrying");
+                            if let Some(input) = modified_input {
+                                current_args = input;
+                            }
+                            if let Some(d) = delay {
+                                tokio::time::sleep(d).await;
+                            }
+                            recovery_ctx.retry_count += 1;
                         }
 
-                        RecoveryAction::UseFallback { tool, input, reason } => {
-                            info!("Recovery: Using fallback tool '{}' - {}", tool, reason);
+                        RecoveryAction::UseFallback { tool, input } => {
+                            info!("Recovery: Using fallback tool '{}'", tool);
                             current_tool = tool;
                             current_args = input;
                         }
 
-                        RecoveryAction::WaitAndRetry { delay_ms, reason } => {
-                            info!("Recovery: Waiting {}ms - {}", delay_ms, reason);
-                            tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+                        RecoveryAction::Skip { reason } => {
+                            info!("Recovery: Skipping - {}", reason);
+                            return Err(Error::Tool(format!("Skipped: {}", reason)));
                         }
 
-                        RecoveryAction::AskUser { question, context } => {
+                        RecoveryAction::AskUser { question, suggestions } => {
+                            let suggestions_str = suggestions.join(", ");
                             let error_with_question = format!(
-                                "Tool failed: {}\n\nRecovery question: {}\nContext: {}",
-                                error_msg, question, context
+                                "Tool failed: {}\n\nRecovery question: {}\nSuggestions: {}",
+                                error_msg, question, suggestions_str
                             );
                             return Err(Error::Tool(error_with_question));
                         }
 
-                        RecoveryAction::GiveUp { reason, suggestions } => {
-                            let error_with_help = format!(
-                                "Tool failed: {}\nReason: {}\nSuggestions:\n{}",
-                                error_msg,
-                                reason,
-                                suggestions
-                                    .iter()
-                                    .map(|s| format!("  - {}", s))
-                                    .collect::<Vec<_>>()
-                                    .join("\n")
+                        RecoveryAction::GiveUp { reason } => {
+                            let error_with_reason = format!(
+                                "Tool failed: {}\nReason: {}",
+                                error_msg, reason
                             );
-                            return Err(Error::Tool(error_with_help));
+                            return Err(Error::Tool(error_with_reason));
                         }
                     }
                 }

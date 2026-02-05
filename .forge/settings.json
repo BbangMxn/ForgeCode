@@ -1,0 +1,66 @@
+{
+  "$schema": "https://forgecode.dev/schema/settings.json",
+  "version": "0.1.0",
+
+  "provider": {
+    "default": "ollama",
+    "ollama": {
+      "base_url": "http://localhost:11434",
+      "model": "qwen3:8b"
+    },
+    "anthropic": {
+      "model": "claude-sonnet-4-20250514",
+      "max_tokens": 8192
+    },
+    "openai": {
+      "model": "gpt-4o",
+      "max_tokens": 8192
+    }
+  },
+
+  "execution": {
+    "default_mode": "local",
+    "allow_local": true,
+    "container": {
+      "default_image": "forgecode/workspace:latest",
+      "auto_cleanup": true,
+      "timeout_secs": 120,
+      "memory_limit": "2g"
+    }
+  },
+
+  "permissions": {
+    "allow": [
+      "Bash(cargo:*)",
+      "Bash(git:*)",
+      "Bash(ls:*)",
+      "Bash(cat:*)",
+      "Bash(echo:*)"
+    ],
+    "deny": [
+      "Bash(rm -rf /)",
+      "Bash(sudo rm -rf:*)"
+    ],
+    "ask": [
+      "Bash(rm:*)",
+      "Bash(mv:*)"
+    ]
+  },
+
+  "tools": {
+    "disabled": [],
+    "execution_mode": {
+      "bash": "ask",
+      "write": "ask"
+    }
+  },
+
+  "mcp": {
+    "servers": {}
+  },
+
+  "tui": {
+    "theme": "default",
+    "show_tokens": true
+  }
+}

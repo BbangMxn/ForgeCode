@@ -25,7 +25,8 @@ use crate::tool::security::{is_sensitive_path, PathValidator};
 /// Edit 도구 입력
 #[derive(Debug, Deserialize)]
 pub struct EditInput {
-    /// 파일 경로 (절대 경로 필수)
+    /// 파일 경로 (file_path, path, file 모두 허용)
+    #[serde(alias = "path", alias = "file")]
     pub file_path: String,
 
     /// 대체할 문자열 (현재 파일에 존재해야 함)
@@ -208,7 +209,7 @@ impl Tool for EditTool {
             "properties": {
                 "file_path": {
                     "type": "string",
-                    "description": "The absolute path to the file to modify"
+                    "description": "Path to the file to modify. Can be absolute or relative to the working directory."
                 },
                 "old_string": {
                     "type": "string",
@@ -255,15 +256,15 @@ impl Tool for EditTool {
         let parsed: EditInput = serde_json::from_value(input.clone())
             .map_err(|e| forge_foundation::Error::InvalidInput(format!("Invalid input: {}", e)))?;
 
-        let path = Path::new(&parsed.file_path);
+        let input_path = Path::new(&parsed.file_path);
 
-        // 경로 검증 - 절대 경로 필수
-        if !path.is_absolute() {
-            return Ok(ToolResult::error(format!(
-                "Path must be absolute, got: {}",
-                parsed.file_path
-            )));
-        }
+        // 상대 경로인 경우 working directory 기준으로 변환
+        let path = if input_path.is_absolute() {
+            input_path.to_path_buf()
+        } else {
+            context.working_dir().join(input_path)
+        };
+        let path = path.as_path();
 
         // 경로 보안 검증 (path traversal, 위험 경로 체크)
         let validator = PathValidator::new().with_allowed_root(context.working_dir());

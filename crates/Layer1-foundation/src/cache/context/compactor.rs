@@ -2,9 +2,13 @@
 //!
 //! Compresses large content (file contents, tool results) into references.
 //! This is a reversible operation - the original content can be retrieved.
+//!
+//! Performance optimizations:
+//! - Uses VecDeque for O(1) LRU eviction
+//! - Pre-allocated storage capacity
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::Path;
 use uuid::Uuid;
 
@@ -96,6 +100,12 @@ enum ContentType {
 /// - Verbose tool outputs (Grep results, Bash output)
 /// - Any content that can be re-fetched if needed
 ///
+/// # Performance
+///
+/// - Uses VecDeque for O(1) front removal during LRU eviction
+/// - Pre-allocates storage capacity based on max_entries
+/// - Avoids allocations in hot paths
+///
 /// # Example
 ///
 /// ```rust,ignore
@@ -110,38 +120,40 @@ enum ContentType {
 pub struct ContextCompactor {
     config: CompactorConfig,
     storage: HashMap<ContentId, StoredEntry>,
-    /// Order of insertion for LRU eviction
-    insertion_order: Vec<ContentId>,
+    /// Order of insertion for LRU eviction (VecDeque for O(1) pop_front)
+    insertion_order: VecDeque<ContentId>,
 }
 
 impl ContextCompactor {
     /// Create a new compactor with default settings
     pub fn new() -> Self {
+        let config = CompactorConfig::default();
         Self {
-            config: CompactorConfig::default(),
-            storage: HashMap::new(),
-            insertion_order: Vec::new(),
+            storage: HashMap::with_capacity(config.max_entries),
+            insertion_order: VecDeque::with_capacity(config.max_entries),
+            config,
         }
     }
 
     /// Create a compactor with a specific threshold
     pub fn with_threshold(threshold_bytes: usize) -> Self {
+        let config = CompactorConfig {
+            threshold_bytes,
+            ..Default::default()
+        };
         Self {
-            config: CompactorConfig {
-                threshold_bytes,
-                ..Default::default()
-            },
-            storage: HashMap::new(),
-            insertion_order: Vec::new(),
+            storage: HashMap::with_capacity(config.max_entries),
+            insertion_order: VecDeque::with_capacity(config.max_entries),
+            config,
         }
     }
 
     /// Create a compactor with custom configuration
     pub fn with_config(config: CompactorConfig) -> Self {
         Self {
+            storage: HashMap::with_capacity(config.max_entries),
+            insertion_order: VecDeque::with_capacity(config.max_entries),
             config,
-            storage: HashMap::new(),
-            insertion_order: Vec::new(),
         }
     }
 
@@ -265,6 +277,8 @@ impl ContextCompactor {
 
     /// Remove a stored entry
     pub fn remove(&mut self, id: &ContentId) -> Option<String> {
+        // O(n) in worst case, but typically removes recent items
+        // VecDeque::retain is still O(n) but with better cache locality
         self.insertion_order.retain(|i| i != id);
         self.storage.remove(id).map(|e| e.content)
     }
@@ -304,11 +318,10 @@ impl ContextCompactor {
 
     /// Store content and return its ID
     fn store(&mut self, content: &str, content_type: ContentType) -> ContentId {
-        // Evict oldest if at capacity
+        // Evict oldest if at capacity - O(1) with VecDeque::pop_front
         while self.storage.len() >= self.config.max_entries {
-            if let Some(oldest_id) = self.insertion_order.first().copied() {
+            if let Some(oldest_id) = self.insertion_order.pop_front() {
                 self.storage.remove(&oldest_id);
-                self.insertion_order.remove(0);
             } else {
                 break;
             }
@@ -323,7 +336,7 @@ impl ContextCompactor {
                 created_at: std::time::Instant::now(),
             },
         );
-        self.insertion_order.push(id);
+        self.insertion_order.push_back(id);
 
         id
     }
@@ -420,10 +433,10 @@ mod tests {
         let mut compactor = ContextCompactor::with_config(config);
 
         // Add 4 entries (capacity is 3)
-        let id1 = compactor.compact("x".repeat(20)).restore_key.unwrap();
-        let _id2 = compactor.compact("y".repeat(20)).restore_key.unwrap();
-        let _id3 = compactor.compact("z".repeat(20)).restore_key.unwrap();
-        let _id4 = compactor.compact("w".repeat(20)).restore_key.unwrap();
+        let id1 = compactor.compact(&"x".repeat(20)).restore_key.unwrap();
+        let _id2 = compactor.compact(&"y".repeat(20)).restore_key.unwrap();
+        let _id3 = compactor.compact(&"z".repeat(20)).restore_key.unwrap();
+        let _id4 = compactor.compact(&"w".repeat(20)).restore_key.unwrap();
 
         // First entry should be evicted
         assert!(compactor.restore(&id1).is_none());

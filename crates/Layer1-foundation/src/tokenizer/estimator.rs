@@ -24,23 +24,26 @@ impl EstimateTokenizer {
     }
 
     /// 텍스트의 언어 특성을 분석하여 토큰 수 추정
+    ///
+    /// Performance optimized:
+    /// - Single-pass iteration (no Vec allocation)
+    /// - Early exit for empty text
+    /// - Inline character classification
+    #[inline]
     fn estimate_tokens(&self, text: &str) -> usize {
-        let chars: Vec<char> = text.chars().collect();
-        let total_chars = chars.len();
-
-        if total_chars == 0 {
+        if text.is_empty() {
             return 0;
         }
 
-        // 언어별 문자 비율 분석
-        let mut ascii_count = 0;
-        let mut cjk_count = 0; // 한중일
-        let mut other_count = 0;
+        // Single-pass character analysis (no allocation)
+        let mut ascii_count = 0u32;
+        let mut cjk_count = 0u32;
+        let mut other_count = 0u32;
 
-        for c in &chars {
+        for c in text.chars() {
             if c.is_ascii() {
                 ascii_count += 1;
-            } else if is_cjk(*c) {
+            } else if is_cjk(c) {
                 cjk_count += 1;
             } else {
                 other_count += 1;
@@ -706,67 +709,87 @@ impl Tokenizer for LlamaEstimator {
 // ============================================================================
 
 /// CJK (한중일) 문자인지 확인
+///
+/// Performance optimized:
+/// - Fast-path for ASCII (most common case)
+/// - Ordered checks by frequency (Korean > CJK > Japanese)
+#[inline]
 fn is_cjk(c: char) -> bool {
     let code = c as u32;
-    // 한글
-    (0xAC00..=0xD7AF).contains(&code) ||
-    (0x1100..=0x11FF).contains(&code) ||
-    (0x3130..=0x318F).contains(&code) ||
-    // 한자 (CJK Unified Ideographs)
-    (0x4E00..=0x9FFF).contains(&code) ||
-    // 일본어 히라가나/카타카나
-    (0x3040..=0x309F).contains(&code) ||
-    (0x30A0..=0x30FF).contains(&code)
+
+    // Fast-path: ASCII is never CJK (covers 95%+ of typical code)
+    if code < 0x1100 {
+        return false;
+    }
+
+    // Most frequent first: Korean syllables (AC00-D7AF)
+    if code >= 0xAC00 && code <= 0xD7AF {
+        return true;
+    }
+
+    // CJK Unified Ideographs (4E00-9FFF) - Chinese/Japanese Kanji
+    if code >= 0x4E00 && code <= 0x9FFF {
+        return true;
+    }
+
+    // Less frequent: Japanese Hiragana/Katakana
+    if code >= 0x3040 && code <= 0x30FF {
+        return true;
+    }
+
+    // Rare: Korean Jamo, compatibility
+    (code >= 0x1100 && code <= 0x11FF) ||
+    (code >= 0x3130 && code <= 0x318F)
 }
 
 /// 코드 비율 추정
+///
+/// Performance optimized:
+/// - No Vec allocation (direct iterator)
+/// - Early exit for empty text
+/// - Short-circuit code detection
+#[inline]
 fn detect_code_ratio(text: &str) -> f32 {
-    let lines: Vec<&str> = text.lines().collect();
-    if lines.is_empty() {
+    if text.is_empty() {
         return 0.0;
     }
 
-    let code_indicators = [
-        "fn ",
-        "def ",
-        "class ",
-        "import ",
-        "from ",
-        "const ",
-        "let ",
-        "var ",
-        "pub ",
-        "func ",
-        "function ",
-        "return ",
-        "if ",
-        "else ",
-        "for ",
-        "while ",
-        "match ",
-        "->",
-        "=>",
-        "::",
-        "//",
-        "/*",
-        "*/",
-        "# ",
-        "```",
+    // Static code indicators (compiler optimizes as constant)
+    const CODE_INDICATORS: &[&str] = &[
+        "fn ", "def ", "class ", "import ", "from ", "const ", "let ", "var ",
+        "pub ", "func ", "function ", "return ", "if ", "else ", "for ",
+        "while ", "match ", "->", "=>", "::", "//", "/*", "*/", "# ", "```",
     ];
 
-    let code_lines = lines
-        .iter()
-        .filter(|line| {
-            let trimmed = line.trim();
-            code_indicators.iter().any(|ind| trimmed.contains(ind))
-                || trimmed.starts_with('{')
-                || trimmed.starts_with('}')
-                || trimmed.ends_with(';')
-                || trimmed.ends_with(':')
-        })
-        .count();
+    let mut total_lines = 0u32;
+    let mut code_lines = 0u32;
 
-    code_lines as f32 / lines.len() as f32
+    // Single-pass line iteration (no allocation)
+    for line in text.lines() {
+        total_lines += 1;
+        let trimmed = line.trim();
+
+        // Fast structural checks first (single char comparison)
+        if trimmed.starts_with('{')
+            || trimmed.starts_with('}')
+            || trimmed.ends_with(';')
+            || trimmed.ends_with(':')
+        {
+            code_lines += 1;
+            continue;
+        }
+
+        // Check code indicators (short-circuit on first match)
+        if CODE_INDICATORS.iter().any(|ind| trimmed.contains(ind)) {
+            code_lines += 1;
+        }
+    }
+
+    if total_lines == 0 {
+        return 0.0;
+    }
+
+    code_lines as f32 / total_lines as f32
 }
 
 #[cfg(test)]
