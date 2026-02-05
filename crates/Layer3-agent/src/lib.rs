@@ -55,6 +55,15 @@ pub mod steering;
 // Performance optimization
 pub mod parallel;
 
+// Context Store (2025 Deep Agent pattern)
+pub mod context_store;
+
+// Smart Context Management (2025 Claude Opus 4.5 style - 65% token savings)
+pub mod smart_context;
+
+// Agent Sub-skills (2025 Cursor 2.4 style)
+pub mod subskill;
+
 // Long-running agent support (Claude Code style)
 pub mod todo;
 pub mod progress;
