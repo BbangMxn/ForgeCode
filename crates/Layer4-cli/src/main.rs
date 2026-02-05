@@ -1,5 +1,6 @@
 //! ForgeCode CLI - Main entry point
 
+mod auto_config;
 mod cli;
 mod clipboard;
 mod cost;
@@ -8,6 +9,7 @@ mod history;
 mod hooks;
 mod init;
 mod markdown;
+mod project;
 mod session;
 mod setup;
 mod syntax;
