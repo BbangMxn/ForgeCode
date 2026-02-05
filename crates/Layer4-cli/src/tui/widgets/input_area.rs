@@ -117,12 +117,75 @@ impl InputState {
 
     /// 줄 시작으로
     pub fn move_home(&mut self) {
-        self.cursor = 0;
+        // 멀티라인: 현재 줄의 시작으로
+        if let Some(line_start) = self.content[..self.cursor].rfind('\n') {
+            self.cursor = line_start + 1;
+        } else {
+            self.cursor = 0;
+        }
     }
 
     /// 줄 끝으로
     pub fn move_end(&mut self) {
-        self.cursor = self.content.len();
+        // 멀티라인: 현재 줄의 끝으로
+        if let Some(line_end) = self.content[self.cursor..].find('\n') {
+            self.cursor += line_end;
+        } else {
+            self.cursor = self.content.len();
+        }
+    }
+
+    /// 새 줄 삽입 (Shift+Enter)
+    pub fn insert_newline(&mut self) {
+        if self.disabled {
+            return;
+        }
+        self.content.insert(self.cursor, '\n');
+        self.cursor += 1;
+    }
+
+    /// 현재 줄 삭제 (Ctrl+U)
+    pub fn clear_line(&mut self) {
+        if self.disabled {
+            return;
+        }
+        // 현재 줄의 시작 찾기
+        let line_start = self.content[..self.cursor]
+            .rfind('\n')
+            .map(|p| p + 1)
+            .unwrap_or(0);
+        
+        // 커서부터 줄 시작까지 삭제
+        self.content.drain(line_start..self.cursor);
+        self.cursor = line_start;
+    }
+
+    /// 커서부터 줄 끝까지 삭제 (Ctrl+K)
+    pub fn kill_to_end(&mut self) {
+        if self.disabled {
+            return;
+        }
+        let line_end = self.content[self.cursor..]
+            .find('\n')
+            .map(|p| self.cursor + p)
+            .unwrap_or(self.content.len());
+        self.content.drain(self.cursor..line_end);
+    }
+
+    /// 전체 내용 삭제
+    pub fn clear(&mut self) {
+        self.content.clear();
+        self.cursor = 0;
+    }
+
+    /// 줄 수 계산
+    pub fn line_count(&self) -> usize {
+        self.content.matches('\n').count() + 1
+    }
+
+    /// 현재 줄 번호 (0-indexed)
+    pub fn current_line(&self) -> usize {
+        self.content[..self.cursor].matches('\n').count()
     }
 
     /// 단어 단위로 왼쪽 이동

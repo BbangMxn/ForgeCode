@@ -419,21 +419,29 @@ impl Widget for HelpOverlay {
         let help_text = r#"
   ForgeCode Keyboard Shortcuts
 
+  Input
+    Enter       Send message
+    Shift+Enter New line (multi-line)
+    ↑/↓         History navigation
+    Ctrl+U      Clear line (to start)
+    Ctrl+K      Kill to end of line
+    Ctrl+A      Move to line start
+    Ctrl+E      Move to line end
+    Ctrl+W      Delete word backward
+
   Navigation
-    ↑/↓        History navigation
     PgUp/PgDn  Scroll messages
-    Ctrl+L     Clear screen
+    Ctrl+L     Clear conversation
 
   Agent Control
-    Enter      Send message
     Ctrl+P     Pause/Resume agent
     Ctrl+X     Stop agent
-    Esc        Cancel
 
   Windows
     Ctrl+M     Model switcher
     Ctrl+S     Settings
     ?          This help
+    Esc        Close overlay
 
   Press any key to close
 "#;

@@ -218,6 +218,11 @@ impl ChatPage {
 
         // Handle input
         match key.code {
+            // Shift+Enter: 줄바꿈 (멀티라인 입력)
+            KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                self.input.insert_newline();
+            }
+            // Enter: 메시지 전송
             KeyCode::Enter => {
                 let content = self.input.take(); // take() already adds to history
                 if !content.is_empty() {
@@ -227,6 +232,27 @@ impl ChatPage {
                     }
                     return Some(ChatAction::SendMessage(content));
                 }
+            }
+            // Ctrl+U: 줄 시작까지 삭제
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.input.clear_line();
+            }
+            // Ctrl+K: 줄 끝까지 삭제
+            KeyCode::Char('k') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.input.kill_to_end();
+            }
+            // Ctrl+A: 줄 시작으로
+            KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.input.move_home();
+            }
+            // Ctrl+E: 줄 끝으로
+            KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.input.move_end();
+            }
+            // Ctrl+W: 단어 삭제
+            KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.input.move_word_left();
+                // 삭제까지 구현하려면 추가 로직 필요
             }
             KeyCode::Backspace => {
                 self.input.backspace();
