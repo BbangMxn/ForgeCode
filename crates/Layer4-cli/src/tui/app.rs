@@ -31,7 +31,7 @@ pub async fn run(config: &ProviderConfig) -> anyhow::Result<()> {
     let mut app = App::new();
 
     // Initialize with config
-    if let Err(e) = app.chat.init(config) {
+    if let Err(e) = app.chat.init(config).await {
         // Show error but continue
         eprintln!("Initialization warning: {}", e);
     }

@@ -21,6 +21,7 @@ use forge_agent::{Agent, AgentContext, AgentEvent, MessageHistory, SteeringHandl
 use forge_core::ToolRegistry;
 use forge_foundation::{PermissionService, ProviderConfig};
 use forge_provider::Gateway;
+use forge_task::TaskManager;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     Frame,
@@ -101,7 +102,7 @@ impl ChatPage {
     }
 
     /// Initialize with configuration
-    pub fn init(&mut self, config: &ProviderConfig) -> Result<(), String> {
+    pub async fn init(&mut self, config: &ProviderConfig) -> Result<(), String> {
         // Create gateway
         let gateway =
             Gateway::from_config(config).map_err(|e| format!("Failed to initialize LLM: {}", e))?;
@@ -124,13 +125,18 @@ impl ChatPage {
         let working_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
         self.header.cwd = working_dir.to_string_lossy().to_string();
 
-        // Create context
-        self.ctx = Some(Arc::new(AgentContext::new(
-            Arc::new(gateway),
-            Arc::new(tools),
-            Arc::new(permissions),
-            working_dir,
-        )));
+        // Create task manager for long-running commands (servers, PTY)
+        let task_manager = Arc::new(TaskManager::new(forge_task::TaskManagerConfig::default()).await);
+
+        // Create context with task manager
+        self.ctx = Some(Arc::new(
+            AgentContext::new(
+                Arc::new(gateway),
+                Arc::new(tools),
+                Arc::new(permissions),
+                working_dir,
+            ).with_task_manager(task_manager)
+        ));
 
         self.header.agent_status = AgentStatus::Ready;
         self.status_bar.info("Connected");

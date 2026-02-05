@@ -7,6 +7,7 @@ use forge_agent::{Agent, AgentConfig, AgentContext, AgentEvent, MessageHistory};
 use forge_core::ToolRegistry;
 use forge_foundation::{PermissionService, ProviderConfig, Result};
 use forge_provider::Gateway;
+use forge_task::TaskManager;
 use std::io::{self, Write};
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -23,8 +24,14 @@ pub async fn run_once(config: &ProviderConfig, prompt: &str) -> Result<()> {
 
     let working_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
 
-    // Create agent context
-    let ctx = Arc::new(AgentContext::new(gateway, tools, permissions, working_dir));
+    // Create task manager for long-running commands (servers, PTY)
+    let task_manager = Arc::new(TaskManager::new(forge_task::TaskManagerConfig::default()).await);
+
+    // Create agent context with task manager
+    let ctx = Arc::new(
+        AgentContext::new(gateway, tools, permissions, working_dir.clone())
+            .with_task_manager(task_manager)
+    );
 
     // Create agent with config
     let agent = Agent::with_config(ctx, AgentConfig::default());
