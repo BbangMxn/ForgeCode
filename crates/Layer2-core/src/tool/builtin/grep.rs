@@ -23,10 +23,12 @@ use parking_lot::Mutex;
 #[derive(Debug, Deserialize)]
 pub struct GrepInput {
     /// 검색 패턴 (정규식)
+    /// LLM 호환성을 위해 여러 alias 지원
+    #[serde(alias = "regex", alias = "search", alias = "query", alias = "text")]
     pub pattern: String,
 
     /// 검색 경로 (기본: 현재 디렉토리)
-    #[serde(default)]
+    #[serde(default, alias = "directory", alias = "dir", alias = "root", alias = "file_path")]
     pub path: Option<String>,
 
     /// 파일 확장자 필터 (예: "rs", "ts")
@@ -333,10 +335,58 @@ impl Tool for GrepTool {
     }
 
     async fn execute(&self, input: Value, context: &dyn ToolContext) -> Result<ToolResult> {
-        // 입력 파싱
-        let parsed: GrepInput = serde_json::from_value(input).map_err(|e| {
-            forge_foundation::Error::InvalidInput(format!("Invalid input: {}", e))
-        })?;
+        // 입력 파싱 (LLM 호환성을 위한 fallback 지원)
+        let parsed: GrepInput = match &input {
+            // 문자열 입력: 그대로 pattern으로 사용
+            Value::String(pattern) => GrepInput {
+                pattern: pattern.clone(),
+                path: None,
+                file_type: None,
+                glob: None,
+                ignore_case: false,
+                context: None,
+                before: None,
+                after: None,
+                output_mode: "files_with_matches".to_string(),
+                head_limit: None,
+                multiline: false,
+            },
+            // 객체 입력
+            Value::Object(obj) => {
+                if obj.is_empty() {
+                    return Ok(ToolResult::error("Empty input: please provide a 'pattern' field with a regex pattern to search"));
+                }
+                // pattern 필드가 없으면 첫 번째 문자열 값 시도
+                if !obj.contains_key("pattern") && !obj.contains_key("regex") 
+                    && !obj.contains_key("search") && !obj.contains_key("query") {
+                    if let Some((key, Value::String(pattern))) = obj.iter().find(|(_, v)| v.is_string()) {
+                        tracing::warn!("Using '{}' field as pattern (expected 'pattern')", key);
+                        GrepInput {
+                            pattern: pattern.clone(),
+                            path: obj.get("path").and_then(|v| v.as_str().map(String::from)),
+                            file_type: obj.get("type").and_then(|v| v.as_str().map(String::from)),
+                            glob: obj.get("glob").and_then(|v| v.as_str().map(String::from)),
+                            ignore_case: obj.get("-i").and_then(|v| v.as_bool()).unwrap_or(false),
+                            context: obj.get("-C").and_then(|v| v.as_u64().map(|n| n as usize)),
+                            before: obj.get("-B").and_then(|v| v.as_u64().map(|n| n as usize)),
+                            after: obj.get("-A").and_then(|v| v.as_u64().map(|n| n as usize)),
+                            output_mode: obj.get("output_mode").and_then(|v| v.as_str()).unwrap_or("files_with_matches").to_string(),
+                            head_limit: obj.get("head_limit").and_then(|v| v.as_u64().map(|n| n as usize)),
+                            multiline: obj.get("multiline").and_then(|v| v.as_bool()).unwrap_or(false),
+                        }
+                    } else {
+                        return Ok(ToolResult::error("Invalid input: please provide a 'pattern' field with a regex pattern. Example: {\"pattern\": \"TODO\"}"));
+                    }
+                } else {
+                    serde_json::from_value(input.clone()).map_err(|e| {
+                        forge_foundation::Error::InvalidInput(format!("Invalid input: {}", e))
+                    })?
+                }
+            }
+            _ => {
+                return Ok(ToolResult::error("Invalid input type: expected object or string. Example: {\"pattern\": \"TODO\"}"));
+            }
+        };
 
         // 정규식 컴파일
         let pattern = if parsed.multiline {

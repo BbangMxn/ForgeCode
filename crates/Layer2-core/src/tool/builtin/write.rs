@@ -22,14 +22,16 @@ use crate::tool::security::{is_sensitive_path, PathValidator};
 #[derive(Debug, Deserialize)]
 pub struct WriteInput {
     /// 파일 경로 (file_path, path, file 모두 허용)
-    #[serde(alias = "path", alias = "file")]
+    /// LLM 호환성을 위해 여러 alias 지원
+    #[serde(alias = "path", alias = "file", alias = "filename", alias = "target")]
     pub file_path: String,
 
     /// 작성할 내용
+    #[serde(alias = "text", alias = "data", alias = "body")]
     pub content: String,
 
     /// 부모 디렉토리 자동 생성 여부 (기본: true)
-    #[serde(default = "default_create_dirs")]
+    #[serde(default = "default_create_dirs", alias = "mkdir", alias = "create_dirs")]
     pub create_directories: bool,
 }
 
@@ -111,9 +113,36 @@ impl Tool for WriteTool {
     }
 
     async fn execute(&self, input: Value, context: &dyn ToolContext) -> Result<ToolResult> {
-        // 입력 파싱
-        let parsed: WriteInput = serde_json::from_value(input.clone())
-            .map_err(|e| forge_foundation::Error::InvalidInput(format!("Invalid input: {}", e)))?;
+        // 입력 파싱 (LLM 호환성을 위한 fallback 지원)
+        let parsed: WriteInput = match &input {
+            Value::Object(obj) => {
+                if obj.is_empty() {
+                    return Ok(ToolResult::error("Empty input: please provide 'file_path' and 'content' fields"));
+                }
+                // file_path 필드가 없으면 첫 번째 문자열-문자열 쌍 시도 (path → content)
+                if !obj.contains_key("file_path") && !obj.contains_key("path") && !obj.contains_key("file") {
+                    let strings: Vec<_> = obj.iter()
+                        .filter_map(|(k, v)| v.as_str().map(|s| (k.as_str(), s)))
+                        .collect();
+                    if strings.len() >= 2 {
+                        tracing::warn!("Using '{}' as file_path, '{}' as content", strings[0].0, strings[1].0);
+                        WriteInput {
+                            file_path: strings[0].1.to_string(),
+                            content: strings[1].1.to_string(),
+                            create_directories: true,
+                        }
+                    } else {
+                        return Ok(ToolResult::error("Invalid input: please provide 'file_path' and 'content' fields. Example: {\"file_path\": \"test.txt\", \"content\": \"Hello\"}"));
+                    }
+                } else {
+                    serde_json::from_value(input.clone())
+                        .map_err(|e| forge_foundation::Error::InvalidInput(format!("Invalid input: {}", e)))?
+                }
+            }
+            _ => {
+                return Ok(ToolResult::error("Invalid input type: expected object with 'file_path' and 'content' fields"));
+            }
+        };
 
         let input_path = Path::new(&parsed.file_path);
 
