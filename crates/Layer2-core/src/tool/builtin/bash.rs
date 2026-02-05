@@ -54,6 +54,62 @@ impl BashTool {
 
     /// 최대 출력 크기 (30KB)
     const MAX_OUTPUT_SIZE: usize = 30_000;
+
+    /// Windows 호환성을 위한 명령어 정규화
+    /// - `&&` → `;` (PowerShell)
+    /// - Unix 명령어 → PowerShell 대체
+    fn normalize_command(command: &str, shell_config: &dyn forge_foundation::ShellConfig) -> String {
+        use forge_foundation::ShellType;
+        
+        let shell_type = shell_config.shell_type();
+        
+        // PowerShell에서만 변환
+        if !matches!(shell_type, ShellType::PowerShell) {
+            return command.to_string();
+        }
+        
+        let mut cmd = command.to_string();
+        
+        // && → ; (PowerShell 명령어 구분자)
+        cmd = cmd.replace(" && ", " ; ");
+        
+        // 일반적인 Unix 명령어를 PowerShell 대체로 변환
+        // 주의: 정확한 패턴 매칭 필요 (단어 경계)
+        let replacements = [
+            // 파일 작업
+            ("cat ", "Get-Content "),
+            ("ls ", "Get-ChildItem "),
+            ("ls\n", "Get-ChildItem\n"),
+            ("rm -rf ", "Remove-Item -Recurse -Force "),
+            ("rm -r ", "Remove-Item -Recurse "),
+            ("rm ", "Remove-Item "),
+            ("cp ", "Copy-Item "),
+            ("mv ", "Move-Item "),
+            ("mkdir -p ", "New-Item -ItemType Directory -Force -Path "),
+            ("mkdir ", "New-Item -ItemType Directory -Path "),
+            ("touch ", "New-Item -ItemType File -Path "),
+            // 텍스트 처리
+            ("grep ", "Select-String -Pattern "),
+            ("head -n ", "Select-Object -First "),
+            ("tail -n ", "Select-Object -Last "),
+            ("wc -l", "Measure-Object -Line"),
+            // 기타
+            ("pwd", "(Get-Location).Path"),
+            ("echo ", "Write-Output "),
+            ("which ", "Get-Command "),
+            ("find ", "Get-ChildItem -Recurse -Filter "),
+        ];
+        
+        for (unix, ps) in &replacements {
+            // 명령어 시작 부분이나 ; 뒤에서만 변환
+            if cmd.starts_with(unix) {
+                cmd = format!("{}{}", ps, &cmd[unix.len()..]);
+            }
+            cmd = cmd.replace(&format!("; {}", unix), &format!("; {}", ps));
+        }
+        
+        cmd
+    }
 }
 
 impl Default for BashTool {
@@ -136,8 +192,11 @@ impl Tool for BashTool {
             return Ok(ToolResult::error("Command cannot be empty"));
         }
 
+        // Windows 호환성: 명령어 자동 변환
+        let command = Self::normalize_command(&parsed.command, context.shell_config());
+
         // CommandAnalyzer로 위험도 분석
-        let analysis = command_analyzer().analyze(&parsed.command);
+        let analysis = command_analyzer().analyze(&command);
 
         // 금지 명령어 차단
         if analysis.risk == CommandRisk::Forbidden {
@@ -193,12 +252,12 @@ impl Tool for BashTool {
         let shell_exe = shell_config.executable();
         let shell_args = shell_config.exec_args();
 
-        // 명령어 실행
+        // 명령어 실행 (정규화된 명령어 사용)
         let mut cmd = Command::new(shell_exe);
         for arg in &shell_args {
             cmd.arg(arg);
         }
-        cmd.arg(&parsed.command);
+        cmd.arg(&command);
 
         // 작업 디렉토리 설정
         cmd.current_dir(context.working_dir());

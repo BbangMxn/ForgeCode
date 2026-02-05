@@ -12,8 +12,8 @@ use ratatui::{
     buffer::Buffer,
     layout::Rect,
     style::{Color, Modifier, Style},
-    text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Widget},
+    text::Span,
+    widgets::{Block, Borders, Widget},
 };
 
 /// 지원하는 언어

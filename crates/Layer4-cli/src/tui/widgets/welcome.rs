@@ -6,8 +6,8 @@ use ratatui::{
     buffer::Buffer,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
-    text::{Line, Span, Text},
-    widgets::{Block, Borders, Paragraph, Widget, Wrap},
+    text::{Line, Span},
+    widgets::{Block, Borders, Paragraph, Widget},
 };
 
 /// ForgeCode ASCII 아트 로고

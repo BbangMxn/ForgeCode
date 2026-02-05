@@ -8,7 +8,7 @@
 //! - Claude Code 스타일 UI
 
 use crate::cost::CostTracker;
-use crate::session::{SavedMessage, SavedToolCall, SessionManager};
+use crate::session::SessionManager;
 use crate::tui::components::{ModelSwitcher, ModelSwitcherAction, PermissionModalManager};
 use crate::tui::widgets::{
     AgentStatus, ChatMessage, ChatView, ChatViewState, Header, HeaderState, InputArea, InputState,
@@ -16,7 +16,6 @@ use crate::tui::widgets::{
     WelcomeScreen,
 };
 use crate::tui::{current_theme, HelpOverlay, Theme};
-use chrono::Local;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use forge_agent::{Agent, AgentContext, AgentEvent, MessageHistory, SteeringHandle};
 use forge_core::ToolRegistry;

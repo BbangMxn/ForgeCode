@@ -7,7 +7,6 @@
 
 use std::collections::HashMap;
 use std::env;
-use std::path::Path;
 use std::process::Command;
 
 /// 환경 정보

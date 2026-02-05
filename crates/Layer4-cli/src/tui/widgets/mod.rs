@@ -11,8 +11,7 @@ pub mod welcome;
 
 // Re-exports
 pub use chat_view::{ChatMessage, ChatView, ChatViewState, MessageRole, ToolBlock, ToolExecutionState};
-pub use code_block::{CodeBlock, Language, Token, TokenKind, tokenize};
 pub use header::{AgentStatus, Header, HeaderState, SpinnerState};
 pub use input_area::{InputArea, InputState};
 pub use status_bar::{StatusBar, StatusBarState};
-pub use welcome::{WelcomeScreen, LOGO, LOGO_SMALL, LOGO_MINI};
+pub use welcome::WelcomeScreen;
