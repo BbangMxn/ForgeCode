@@ -66,6 +66,14 @@ enum Command {
         #[arg(short, long)]
         force: bool,
     },
+    /// List recent sessions
+    Sessions {
+        /// Number of sessions to show
+        #[arg(short, long, default_value = "10")]
+        limit: usize,
+    },
+    /// Continue the most recent session
+    Continue,
 }
 
 #[tokio::main]
@@ -77,6 +85,26 @@ async fn main() -> anyhow::Result<()> {
         match command {
             Command::Init { force } => {
                 return init::init_project(force);
+            }
+            Command::Sessions { limit } => {
+                return list_sessions_cmd(limit);
+            }
+            Command::Continue => {
+                // Continue most recent session
+                let data_dir = dirs::home_dir()
+                    .unwrap_or_else(|| std::path::PathBuf::from("."))
+                    .join(".forgecode");
+                if let Ok(storage) = forge_foundation::Storage::new(&data_dir) {
+                    if let Ok(sessions) = storage.get_sessions(Some(1)) {
+                        if let Some(session) = sessions.first() {
+                            println!("Continuing session: {}", &session.id[..8.min(session.id.len())]);
+                            // TODO: Load session into TUI
+                        } else {
+                            println!("No recent sessions found. Start a new conversation.");
+                        }
+                    }
+                }
+                // Fall through to TUI
             }
         }
     }
@@ -191,6 +219,55 @@ async fn main() -> anyhow::Result<()> {
         // Interactive TUI mode
         tui::run(&config).await?;
     }
+
+    Ok(())
+}
+
+/// List recent sessions
+fn list_sessions_cmd(limit: usize) -> anyhow::Result<()> {
+    let data_dir = dirs::home_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join(".forgecode");
+    let storage = forge_foundation::Storage::new(&data_dir)?;
+    let sessions = storage.get_sessions(Some(limit as u32))?;
+
+    if sessions.is_empty() {
+        println!("No sessions found.");
+        return Ok(());
+    }
+
+    println!("\n📋 Recent Sessions\n");
+    println!("{:<10} {:<30} {:<15} {:<10} {:<8}", 
+        "ID", "Title", "Model", "Messages", "Tokens");
+    println!("{}", "-".repeat(80));
+
+    for session in sessions {
+        let id_short = if session.id.len() >= 8 { &session.id[..8] } else { &session.id };
+        let title = session.title.clone().unwrap_or_else(|| "(untitled)".to_string());
+        let title_display = if title.len() > 28 {
+            format!("{}...", &title[..25])
+        } else {
+            title
+        };
+        let model = session.model.clone().unwrap_or_default();
+        let model_display = if model.len() > 13 {
+            format!("{}...", &model[..10])
+        } else {
+            model
+        };
+        let total_tokens = session.total_input_tokens + session.total_output_tokens;
+
+        println!("{:<10} {:<30} {:<15} {:<10} {:<8}",
+            id_short,
+            title_display,
+            model_display,
+            session.message_count,
+            total_tokens
+        );
+    }
+
+    println!("\nUse 'forge continue' to resume the most recent session.");
+    println!("Use 'forge --session <ID>' to resume a specific session.\n");
 
     Ok(())
 }
