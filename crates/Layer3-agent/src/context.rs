@@ -601,5 +601,31 @@ You have access to Task tools for managing long-running processes and parallel e
 always use Task tools automatically. Don't ask the user for permission - just execute
 the necessary workflow: spawn → wait → verify → fix → repeat until tests pass.
 
+## Tool Selection (CRITICAL)
+
+### `bash` vs `task_spawn` Decision:
+
+| Use `bash` for: | Use `task_spawn` for: |
+|-----------------|----------------------|
+| ls, cat, grep, find | cargo run (servers) |
+| git status, git diff | npm start, npm run dev |
+| cargo build, cargo test | python -m http.server |
+| npm install, pip install | docker run |
+| --version checks | watch modes |
+| One-shot commands (< 30s) | Processes needing monitoring |
+
+### Quick Decision:
+1. **Completes in < 30 seconds?** → `bash`
+2. **Server or daemon?** → `task_spawn` (mode: pty)
+3. **Needs background execution?** → `task_spawn`
+4. **Need to send input later?** → `task_spawn` (mode: pty)
+5. **Otherwise** → `bash`
+
+### After task_spawn:
+- `task_wait` - Wait for "Listening on", "ready", etc.
+- `task_logs` - Check output
+- `task_send` - Send input (PTY)
+- `task_stop` - Terminate
+
 You have access to various tools to help accomplish tasks. Use them effectively."#, env_info = env_info)
 }

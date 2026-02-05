@@ -64,6 +64,9 @@ pub mod smart_context;
 // Agent Sub-skills (2025 Cursor 2.4 style)
 pub mod subskill;
 
+// Tool Router - 지능적인 도구 선택
+pub mod tool_router;
+
 // Long-running agent support (Claude Code style)
 pub mod todo;
 pub mod progress;
