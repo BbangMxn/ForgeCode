@@ -16,6 +16,7 @@ use crate::parallel::{ExecutionStrategy, ToolClassifier};
 use forge_core::AgentContext as CoreAgentContext;
 use forge_core::ToolRegistry;
 use forge_foundation::permission::PermissionService;
+use forge_foundation::env_detect::Environment;
 use forge_foundation::Result;
 use forge_provider::Gateway;
 use forge_task::{TaskManager, TaskState, Task, ExecutionMode};
@@ -538,7 +539,13 @@ pub struct ProviderInfo {
 
 /// Default system prompt for the agent
 fn default_system_prompt() -> String {
-    r#"You are ForgeCode, an AI coding assistant running in the terminal.
+    // 환경 정보 감지
+    let env = Environment::detect();
+    let env_info = env.to_system_info();
+    
+    format!(r#"You are ForgeCode, an AI coding assistant running in the terminal.
+
+{}
 
 You help users with software engineering tasks including:
 - Writing and editing code
@@ -594,6 +601,5 @@ You have access to Task tools for managing long-running processes and parallel e
 always use Task tools automatically. Don't ask the user for permission - just execute
 the necessary workflow: spawn → wait → verify → fix → repeat until tests pass.
 
-You have access to various tools to help accomplish tasks. Use them effectively."#
-        .to_string()
+You have access to various tools to help accomplish tasks. Use them effectively."#, env_info = env_info)
 }

@@ -138,7 +138,9 @@
       "Bash(taskkill:*)",
       "Bash(\"C:/Users/jixso/Desktop/zed/ForgeCode/target/debug/forge.exe\" --provider ollama --model qwen3:8b -p \"Use task_spawn to run ''echo Hello World'' with local mode, then use the returned task_id to call task_logs and get the output\")",
       "Bash(\"C:/Users/jixso/Desktop/zed/ForgeCode/target/debug/forge.exe\" --provider ollama --model qwen3:8b -p \"Start a python http server on port 9999 using task_spawn with pty mode. Extract the task_id from the response, then use task_wait with that exact task_id and pattern ''Serving HTTP'' to wait for server ready, then stop it with task_stop.\")",
-      "Bash(cmd /c \"cd /d C:\\\\Users\\\\jixso\\\\Desktop\\\\zed\\\\ForgeCode && cargo build -p forge-foundation 2>&1\")"
+      "Bash(cmd /c \"cd /d C:\\\\Users\\\\jixso\\\\Desktop\\\\zed\\\\ForgeCode && cargo build -p forge-foundation 2>&1\")",
+      "Bash(xargs:*)",
+      "Bash(/c/Users/jixso/Desktop/zed/ForgeCode/target/release/forge.exe:*)"
     ]
   }
 }

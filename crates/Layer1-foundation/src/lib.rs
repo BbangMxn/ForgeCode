@@ -29,6 +29,7 @@ pub mod audit;
 pub mod cache;
 pub mod config;
 pub mod core;
+pub mod env_detect;
 pub mod error;
 pub mod event;
 pub mod permission;
@@ -350,3 +351,8 @@ pub use strings::{
     ENV_TERM,
     ENV_USER,
 };
+
+// ============================================================================
+// Environment Detection (환경 감지)
+// ============================================================================
+pub use env_detect::{Environment, OsType, ShellKind};

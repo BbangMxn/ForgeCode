@@ -11,6 +11,7 @@ use crate::tui::components::{ModelSwitcher, ModelSwitcherAction, PermissionModal
 use crate::tui::widgets::{
     AgentStatus, ChatMessage, ChatView, ChatViewState, Header, HeaderState, InputArea, InputState,
     MessageRole, SpinnerState, StatusBar, StatusBarState, ToolBlock, ToolExecutionState,
+    WelcomeScreen,
 };
 use crate::tui::{current_theme, HelpOverlay, Theme};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -523,11 +524,19 @@ impl ChatPage {
         let header = Header::new(&self.header).with_theme(self.theme.clone());
         frame.render_widget(header, chunks[0]);
 
-        // Render chat view
-        let chat = ChatView::new(&self.chat)
-            .with_theme(self.theme.clone())
-            .with_spinner_frame(self.spinner.frame);
-        frame.render_widget(chat, chunks[1]);
+        // Render chat view or welcome screen
+        if self.chat.messages.is_empty() {
+            // Show welcome screen when no messages
+            let welcome = WelcomeScreen::new()
+                .with_model(&self.header.provider, &self.header.model);
+            frame.render_widget(welcome, chunks[1]);
+        } else {
+            // Show chat view when there are messages
+            let chat = ChatView::new(&self.chat)
+                .with_theme(self.theme.clone())
+                .with_spinner_frame(self.spinner.frame);
+            frame.render_widget(chat, chunks[1]);
+        }
 
         // Render input area
         let input = InputArea::new(&self.input)

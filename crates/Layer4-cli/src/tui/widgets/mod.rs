@@ -6,9 +6,11 @@ pub mod chat_view;
 pub mod header;
 pub mod input_area;
 pub mod status_bar;
+pub mod welcome;
 
 // Re-exports
 pub use chat_view::{ChatMessage, ChatView, ChatViewState, MessageRole, ToolBlock, ToolExecutionState};
 pub use header::{AgentStatus, Header, HeaderState, SpinnerState};
 pub use input_area::{InputArea, InputState};
 pub use status_bar::{StatusBar, StatusBarState};
+pub use welcome::{WelcomeScreen, LOGO, LOGO_SMALL, LOGO_MINI};

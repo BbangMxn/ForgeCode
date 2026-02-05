@@ -32,6 +32,8 @@ chrono = { workspace = true }
 dirs = { workspace = true }
 regex = { workspace = true }
 glob = { workspace = true }
+which = "6.0"
+hostname = "0.4"
 
 # HTTP Client (for tokenizer)
 reqwest = { workspace = true }
