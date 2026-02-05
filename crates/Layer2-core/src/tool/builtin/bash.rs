@@ -23,6 +23,8 @@ use tokio::time::timeout;
 #[derive(Debug, Deserialize)]
 pub struct BashInput {
     /// 실행할 명령어
+    /// LLM 호환성을 위해 여러 alias 지원
+    #[serde(alias = "cmd", alias = "shell", alias = "script", alias = "exec")]
     pub command: String,
 
     /// 타임아웃 (밀리초, 기본: 120000 = 2분, 최대: 600000 = 10분)
@@ -182,10 +184,45 @@ impl Tool for BashTool {
     }
 
     async fn execute(&self, input: Value, context: &dyn ToolContext) -> Result<ToolResult> {
-        // 입력 파싱
-        let parsed: BashInput = serde_json::from_value(input.clone()).map_err(|e| {
-            forge_foundation::Error::InvalidInput(format!("Invalid input: {}", e))
-        })?;
+        // 입력 파싱 (LLM 호환성을 위한 fallback 지원)
+        let parsed: BashInput = match &input {
+            // 문자열 입력: 그대로 command로 사용
+            Value::String(cmd) => BashInput {
+                command: cmd.clone(),
+                timeout: None,
+                description: None,
+            },
+            // 객체 입력: 정상 파싱 시도
+            Value::Object(obj) => {
+                // 빈 객체 체크
+                if obj.is_empty() {
+                    return Ok(ToolResult::error("Empty input: please provide a 'command' field with the shell command to execute"));
+                }
+                // command/cmd 필드가 없으면 첫 번째 문자열 값 시도
+                if !obj.contains_key("command") && !obj.contains_key("cmd") 
+                    && !obj.contains_key("shell") && !obj.contains_key("script") && !obj.contains_key("exec") {
+                    // 첫 번째 문자열 값을 command로 사용
+                    if let Some((key, Value::String(cmd))) = obj.iter().find(|(_, v)| v.is_string()) {
+                        tracing::warn!("Using '{}' field as command (expected 'command')", key);
+                        BashInput {
+                            command: cmd.clone(),
+                            timeout: obj.get("timeout").and_then(|v| v.as_u64()),
+                            description: obj.get("description").and_then(|v| v.as_str().map(String::from)),
+                        }
+                    } else {
+                        return Ok(ToolResult::error("Invalid input: please provide a 'command' field with the shell command to execute. Example: {\"command\": \"ls -la\"}"));
+                    }
+                } else {
+                    serde_json::from_value(input.clone()).map_err(|e| {
+                        forge_foundation::Error::InvalidInput(format!("Invalid input: {}", e))
+                    })?
+                }
+            }
+            // 기타: 에러
+            _ => {
+                return Ok(ToolResult::error("Invalid input type: expected object or string. Example: {\"command\": \"ls -la\"}"));
+            }
+        };
 
         // 빈 명령어 체크
         if parsed.command.trim().is_empty() {

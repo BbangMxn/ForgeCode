@@ -17,14 +17,16 @@ use std::time::SystemTime;
 #[derive(Debug, Deserialize)]
 pub struct GlobInput {
     /// 글로브 패턴 (예: "**/*.rs", "src/**/*.ts")
+    /// LLM 호환성을 위해 여러 alias 지원
+    #[serde(alias = "glob", alias = "search", alias = "query", alias = "file_pattern")]
     pub pattern: String,
 
     /// 검색 시작 디렉토리 (기본: 현재 작업 디렉토리)
-    #[serde(default)]
+    #[serde(default, alias = "directory", alias = "dir", alias = "root")]
     pub path: Option<String>,
 
     /// 최대 결과 수 (기본: 1000)
-    #[serde(default)]
+    #[serde(default, alias = "max", alias = "count", alias = "max_results")]
     pub limit: Option<usize>,
 }
 
@@ -95,10 +97,42 @@ impl Tool for GlobTool {
     }
 
     async fn execute(&self, input: Value, context: &dyn ToolContext) -> Result<ToolResult> {
-        // 입력 파싱
-        let parsed: GlobInput = serde_json::from_value(input).map_err(|e| {
-            forge_foundation::Error::InvalidInput(format!("Invalid input: {}", e))
-        })?;
+        // 입력 파싱 (LLM 호환성을 위한 fallback 지원)
+        let parsed: GlobInput = match &input {
+            // 문자열 입력: 그대로 pattern으로 사용
+            Value::String(pattern) => GlobInput {
+                pattern: pattern.clone(),
+                path: None,
+                limit: None,
+            },
+            // 객체 입력
+            Value::Object(obj) => {
+                if obj.is_empty() {
+                    return Ok(ToolResult::error("Empty input: please provide a 'pattern' field with a glob pattern (e.g., \"**/*.rs\")"));
+                }
+                // pattern 필드가 없으면 첫 번째 문자열 값 시도
+                if !obj.contains_key("pattern") && !obj.contains_key("glob") 
+                    && !obj.contains_key("search") && !obj.contains_key("query") {
+                    if let Some((key, Value::String(pattern))) = obj.iter().find(|(_, v)| v.is_string()) {
+                        tracing::warn!("Using '{}' field as pattern (expected 'pattern')", key);
+                        GlobInput {
+                            pattern: pattern.clone(),
+                            path: obj.get("path").and_then(|v| v.as_str().map(String::from)),
+                            limit: obj.get("limit").and_then(|v| v.as_u64().map(|n| n as usize)),
+                        }
+                    } else {
+                        return Ok(ToolResult::error("Invalid input: please provide a 'pattern' field with a glob pattern. Example: {\"pattern\": \"**/*.rs\"}"));
+                    }
+                } else {
+                    serde_json::from_value(input.clone()).map_err(|e| {
+                        forge_foundation::Error::InvalidInput(format!("Invalid input: {}", e))
+                    })?
+                }
+            }
+            _ => {
+                return Ok(ToolResult::error("Invalid input type: expected object or string. Example: {\"pattern\": \"**/*.rs\"}"));
+            }
+        };
 
         // 검색 디렉토리 결정
         let search_path = match &parsed.path {

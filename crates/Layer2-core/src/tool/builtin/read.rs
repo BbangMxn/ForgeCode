@@ -169,10 +169,41 @@ impl Tool for ReadTool {
     }
 
     async fn execute(&self, input: Value, context: &dyn ToolContext) -> Result<ToolResult> {
-        // 입력 파싱
-        let parsed: ReadInput = serde_json::from_value(input.clone()).map_err(|e| {
-            forge_foundation::Error::InvalidInput(format!("Invalid input: {}", e))
-        })?;
+        // 입력 파싱 (LLM 호환성을 위한 fallback 지원)
+        let parsed: ReadInput = match &input {
+            // 문자열 입력: 그대로 file_path로 사용
+            Value::String(path) => ReadInput {
+                file_path: path.clone(),
+                offset: None,
+                limit: None,
+            },
+            // 객체 입력
+            Value::Object(obj) => {
+                if obj.is_empty() {
+                    return Ok(ToolResult::error("Empty input: please provide a 'file_path' field with the file to read"));
+                }
+                // file_path/path/file 필드가 없으면 첫 번째 문자열 값 시도
+                if !obj.contains_key("file_path") && !obj.contains_key("path") && !obj.contains_key("file") {
+                    if let Some((key, Value::String(path))) = obj.iter().find(|(_, v)| v.is_string()) {
+                        tracing::warn!("Using '{}' field as file_path (expected 'file_path')", key);
+                        ReadInput {
+                            file_path: path.clone(),
+                            offset: obj.get("offset").and_then(|v| v.as_u64().map(|n| n as u32)),
+                            limit: obj.get("limit").and_then(|v| v.as_u64().map(|n| n as u32)),
+                        }
+                    } else {
+                        return Ok(ToolResult::error("Invalid input: please provide a 'file_path' field with the file to read. Example: {\"file_path\": \"src/main.rs\"}"));
+                    }
+                } else {
+                    serde_json::from_value(input.clone()).map_err(|e| {
+                        forge_foundation::Error::InvalidInput(format!("Invalid input: {}", e))
+                    })?
+                }
+            }
+            _ => {
+                return Ok(ToolResult::error("Invalid input type: expected object or string. Example: {\"file_path\": \"src/main.rs\"}"));
+            }
+        };
 
         let input_path = Path::new(&parsed.file_path);
 
