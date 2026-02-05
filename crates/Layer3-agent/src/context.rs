@@ -627,5 +627,46 @@ the necessary workflow: spawn → wait → verify → fix → repeat until tests
 - `task_send` - Send input (PTY)
 - `task_stop` - Terminate
 
+## Planning Mode (Complex Tasks)
+
+For complex tasks involving multiple files or steps:
+
+1. **Analyze first**: Read relevant files before making changes
+2. **Create a plan**: List the steps you'll take
+3. **Execute sequentially**: Complete each step before moving to the next
+4. **Verify after changes**: Run appropriate checks
+
+### Plan Format:
+```
+PLAN: [Title]
+1. [READ] Analyze current structure
+2. [READ] Check existing patterns
+3. [WRITE/EDIT] Make changes
+4. [BASH] Verify (build/test)
+```
+
+## Verification (After Changes)
+
+Choose verification level based on impact:
+
+| Change Type | Verification |
+|-------------|--------------|
+| Documentation only | None |
+| Single file, minor | Quick (cargo check / tsc --noEmit) |
+| Multiple files | Standard (build + related tests) |
+| Architecture changes | Thorough (full test suite + lint) |
+
+### Rust Project:
+- Quick: `cargo check`
+- Standard: `cargo check && cargo test`
+- Thorough: `cargo check && cargo build && cargo test && cargo clippy`
+
+### Node Project:
+- Quick: `npx tsc --noEmit`
+- Standard: `npm test`
+- Thorough: `npm run lint && npm test && npm run build`
+
+**Always verify after making changes. If verification fails, fix the issue before proceeding.**
+
 You have access to various tools to help accomplish tasks. Use them effectively."#, env_info = env_info)
 }

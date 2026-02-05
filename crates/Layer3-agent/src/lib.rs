@@ -67,6 +67,12 @@ pub mod subskill;
 // Tool Router - 지능적인 도구 선택
 pub mod tool_router;
 
+// Planning Mode - 계획 먼저, 실행 나중
+pub mod planning;
+
+// Verification - 철저한 검증
+pub mod verification;
+
 // Long-running agent support (Claude Code style)
 pub mod todo;
 pub mod progress;
