@@ -21,11 +21,21 @@
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
+    style::{Color, Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, Borders, Paragraph, Widget},
 };
 
 use crate::tui::theme::{current_theme, icons, Theme};
+use crate::syntax::SyntaxHighlighter;
+use std::sync::OnceLock;
+
+/// 전역 구문 강조기
+static HIGHLIGHTER: OnceLock<SyntaxHighlighter> = OnceLock::new();
+
+fn get_highlighter() -> &'static SyntaxHighlighter {
+    HIGHLIGHTER.get_or_init(SyntaxHighlighter::new)
+}
 
 /// 메시지 역할
 #[derive(Debug, Clone, PartialEq)]
@@ -285,26 +295,8 @@ impl<'a> ChatView<'a> {
             Span::raw(" "),
         ]));
 
-        // 메시지 내용 (줄바꿈 처리)
-        for line in msg.content.lines() {
-            if line.is_empty() {
-                lines.push(Line::from(""));
-            } else {
-                // 긴 줄 자동 줄바꿈
-                let wrapped = textwrap::wrap(line, content_width);
-                for wrapped_line in wrapped {
-                    let style = if msg.role == MessageRole::System {
-                        self.theme.system_message()
-                    } else {
-                        self.theme.text()
-                    };
-                    lines.push(Line::from(vec![
-                        Span::raw(" "),
-                        Span::styled(wrapped_line.to_string(), style),
-                    ]));
-                }
-            }
-        }
+        // 메시지 내용 (마크다운 파싱)
+        lines.extend(self.render_markdown_content(&msg.content, content_width, msg.role == MessageRole::System));
 
         // 스트리밍 커서
         if msg.streaming {
@@ -327,6 +319,272 @@ impl<'a> ChatView<'a> {
         lines.push(Line::from(""));
 
         lines
+    }
+
+    /// 마크다운 내용 렌더링 (코드 블록 포함)
+    fn render_markdown_content(&self, content: &str, width: usize, is_system: bool) -> Vec<Line<'static>> {
+        let mut lines = Vec::new();
+        let mut in_code_block = false;
+        let mut code_lang = String::new();
+        let mut code_buffer = String::new();
+
+        for line in content.lines() {
+            if line.starts_with("```") {
+                if in_code_block {
+                    // 코드 블록 종료 - 하이라이트 적용
+                    lines.extend(self.render_code_block(&code_buffer, &code_lang, width));
+                    code_buffer.clear();
+                    in_code_block = false;
+                } else {
+                    // 코드 블록 시작
+                    code_lang = line[3..].trim().to_string();
+                    in_code_block = true;
+                }
+            } else if in_code_block {
+                code_buffer.push_str(line);
+                code_buffer.push('\n');
+            } else {
+                // 일반 텍스트 (인라인 마크다운 처리)
+                lines.extend(self.render_text_line(line, width, is_system));
+            }
+        }
+
+        // 닫히지 않은 코드 블록
+        if in_code_block && !code_buffer.is_empty() {
+            lines.extend(self.render_code_block(&code_buffer, &code_lang, width));
+        }
+
+        lines
+    }
+
+    /// 코드 블록 렌더링 (구문 강조 포함)
+    fn render_code_block(&self, code: &str, lang: &str, width: usize) -> Vec<Line<'static>> {
+        let mut lines = Vec::new();
+        let highlighter = get_highlighter();
+        let inner_width = width.saturating_sub(6);
+
+        // 언어 표시 헤더
+        let lang_display = if lang.is_empty() { "code" } else { lang };
+        let header_fill = inner_width.saturating_sub(lang_display.len() + 4);
+        
+        lines.push(Line::from(vec![
+            Span::raw("  "),
+            Span::styled("┌─ ", Style::default().fg(Color::DarkGray)),
+            Span::styled(lang_display.to_string(), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled(format!(" {}", "─".repeat(header_fill)), Style::default().fg(Color::DarkGray)),
+            Span::styled("┐", Style::default().fg(Color::DarkGray)),
+        ]));
+
+        // 하이라이트된 코드
+        let highlighted = highlighter.highlight(code.trim_end(), lang);
+        let code_lines: Vec<_> = code.trim_end().lines().collect();
+        let num_width = code_lines.len().to_string().len().max(2);
+
+        for (i, hl_line) in highlighted.into_iter().enumerate() {
+            let line_num = format!("{:>width$}", i + 1, width = num_width);
+            
+            // 먼저 content_len 계산
+            let content_len: usize = hl_line.spans.iter().map(|s| s.content.len()).sum();
+            
+            let mut spans = vec![
+                Span::raw("  "),
+                Span::styled("│", Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("{} ", line_num), Style::default().fg(Color::DarkGray)),
+            ];
+            spans.extend(hl_line.spans);
+            
+            // 오른쪽 패딩
+            let padding = inner_width.saturating_sub(num_width + 1 + content_len);
+            spans.push(Span::raw(" ".repeat(padding)));
+            spans.push(Span::styled("│", Style::default().fg(Color::DarkGray)));
+            
+            lines.push(Line::from(spans));
+        }
+
+        // 푸터
+        let footer_width = inner_width + 2;
+        lines.push(Line::from(vec![
+            Span::raw("  "),
+            Span::styled(format!("└{}┘", "─".repeat(footer_width)), Style::default().fg(Color::DarkGray)),
+        ]));
+
+        lines
+    }
+
+    /// 일반 텍스트 라인 렌더링 (인라인 마크다운 포함)
+    fn render_text_line(&self, line: &str, width: usize, is_system: bool) -> Vec<Line<'static>> {
+        let mut result = Vec::new();
+        
+        if line.is_empty() {
+            result.push(Line::from(""));
+            return result;
+        }
+
+        // 헤딩 처리
+        if line.starts_with('#') {
+            let (level, text) = parse_heading(line);
+            let style = heading_style(level, &self.theme);
+            result.push(Line::from(vec![
+                Span::raw(" "),
+                Span::styled(text.to_string(), style),
+            ]));
+            return result;
+        }
+
+        // 리스트 처리
+        let (indent, content) = if line.starts_with("- ") || line.starts_with("* ") {
+            (
+                " • ",
+                &line[2..],
+            )
+        } else if line.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) 
+            && line.contains(". ") 
+        {
+            let parts: Vec<&str> = line.splitn(2, ". ").collect();
+            if parts.len() == 2 {
+                (parts[0], parts[1])
+            } else {
+                ("", line)
+            }
+        } else {
+            ("", line)
+        };
+
+        // 인라인 포맷팅 파싱
+        let spans = self.parse_inline_formatting(content, is_system);
+        
+        // 줄바꿈 처리
+        let effective_width = width.saturating_sub(indent.len() + 2);
+        let text_content: String = spans.iter().map(|s| s.content.as_ref()).collect();
+        
+        if text_content.len() <= effective_width {
+            let mut line_spans = vec![Span::raw(" ")];
+            if !indent.is_empty() {
+                line_spans.push(Span::styled(indent.to_string(), Style::default().fg(Color::Yellow)));
+            }
+            line_spans.extend(spans);
+            result.push(Line::from(line_spans));
+        } else {
+            // 긴 줄 래핑
+            let wrapped = textwrap::wrap(content, effective_width);
+            for (i, wrapped_line) in wrapped.into_iter().enumerate() {
+                let mut line_spans = vec![Span::raw(" ")];
+                if i == 0 && !indent.is_empty() {
+                    line_spans.push(Span::styled(indent.to_string(), Style::default().fg(Color::Yellow)));
+                } else if !indent.is_empty() {
+                    line_spans.push(Span::raw("   ")); // 들여쓰기 유지
+                }
+                line_spans.extend(self.parse_inline_formatting(&wrapped_line, is_system));
+                result.push(Line::from(line_spans));
+            }
+        }
+
+        result
+    }
+
+    /// 인라인 포맷팅 파싱 (bold, italic, code, links)
+    fn parse_inline_formatting(&self, text: &str, is_system: bool) -> Vec<Span<'static>> {
+        let base_style = if is_system {
+            self.theme.system_message()
+        } else {
+            self.theme.text()
+        };
+
+        let mut spans = Vec::new();
+        let mut chars = text.char_indices().peekable();
+        let mut current_text = String::new();
+
+        while let Some((i, ch)) = chars.next() {
+            match ch {
+                '`' => {
+                    // 현재 텍스트 플러시
+                    if !current_text.is_empty() {
+                        spans.push(Span::styled(current_text.clone(), base_style));
+                        current_text.clear();
+                    }
+
+                    // 인라인 코드 추출
+                    let mut code = String::new();
+                    for (_, c) in chars.by_ref() {
+                        if c == '`' {
+                            break;
+                        }
+                        code.push(c);
+                    }
+
+                    if !code.is_empty() {
+                        spans.push(Span::styled(
+                            format!("`{}`", code),
+                            Style::default()
+                                .fg(Color::Rgb(255, 198, 109))
+                                .bg(Color::Rgb(40, 42, 54)),
+                        ));
+                    }
+                }
+                '*' if chars.peek().map(|(_, c)| *c == '*').unwrap_or(false) => {
+                    // Bold
+                    chars.next(); // 두 번째 * 스킵
+                    
+                    if !current_text.is_empty() {
+                        spans.push(Span::styled(current_text.clone(), base_style));
+                        current_text.clear();
+                    }
+
+                    let mut bold_text = String::new();
+                    while let Some((_, c)) = chars.next() {
+                        if c == '*' && chars.peek().map(|(_, c)| *c == '*').unwrap_or(false) {
+                            chars.next();
+                            break;
+                        }
+                        bold_text.push(c);
+                    }
+
+                    if !bold_text.is_empty() {
+                        spans.push(Span::styled(
+                            bold_text,
+                            base_style.add_modifier(Modifier::BOLD),
+                        ));
+                    }
+                }
+                '*' | '_' => {
+                    // Italic
+                    if !current_text.is_empty() {
+                        spans.push(Span::styled(current_text.clone(), base_style));
+                        current_text.clear();
+                    }
+
+                    let delimiter = ch;
+                    let mut italic_text = String::new();
+                    for (_, c) in chars.by_ref() {
+                        if c == delimiter {
+                            break;
+                        }
+                        italic_text.push(c);
+                    }
+
+                    if !italic_text.is_empty() {
+                        spans.push(Span::styled(
+                            italic_text,
+                            base_style.add_modifier(Modifier::ITALIC),
+                        ));
+                    }
+                }
+                _ => {
+                    current_text.push(ch);
+                }
+            }
+        }
+
+        // 남은 텍스트
+        if !current_text.is_empty() {
+            spans.push(Span::styled(current_text, base_style));
+        }
+
+        if spans.is_empty() {
+            spans.push(Span::styled("", base_style));
+        }
+
+        spans
     }
 
     /// 도구 블록 렌더링
@@ -463,6 +721,44 @@ impl Widget for ChatView<'_> {
     }
 }
 
+/// 헤딩 파싱
+fn parse_heading(line: &str) -> (usize, &str) {
+    let mut level = 0;
+    for ch in line.chars() {
+        if ch == '#' {
+            level += 1;
+        } else {
+            break;
+        }
+    }
+    let text = line[level..].trim();
+    (level.min(6), text)
+}
+
+/// 헤딩 스타일
+fn heading_style(level: usize, theme: &Theme) -> Style {
+    match level {
+        1 => Style::default()
+            .fg(Color::Magenta)
+            .add_modifier(Modifier::BOLD),
+        2 => Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+        3 => Style::default()
+            .fg(Color::Green)
+            .add_modifier(Modifier::BOLD),
+        4 => Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
+        5 => Style::default()
+            .fg(Color::Blue)
+            .add_modifier(Modifier::BOLD),
+        _ => Style::default()
+            .fg(Color::White)
+            .add_modifier(Modifier::BOLD),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -490,5 +786,12 @@ mod tests {
         state.push(ChatMessage::assistant("Response"));
         
         assert_eq!(state.messages.len(), 2);
+    }
+
+    #[test]
+    fn test_parse_heading() {
+        assert_eq!(parse_heading("# Title"), (1, "Title"));
+        assert_eq!(parse_heading("## Subtitle"), (2, "Subtitle"));
+        assert_eq!(parse_heading("### H3"), (3, "H3"));
     }
 }

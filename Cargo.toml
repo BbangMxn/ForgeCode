@@ -67,6 +67,13 @@ which = "7.0"
 regex = "1.11"
 rand = "0.8"
 
+# Syntax Highlighting & Markdown
+syntect = { version = "5.2", default-features = false, features = ["default-syntaxes", "default-themes", "parsing", "regex-onig"] }
+pulldown-cmark = "0.12"
+
+# Clipboard
+arboard = "3.4"
+
 # PTY and Shell
 portable-pty = "0.9"
 strip-ansi-escapes = "0.2"

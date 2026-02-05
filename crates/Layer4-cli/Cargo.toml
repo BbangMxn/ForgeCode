@@ -47,6 +47,14 @@ chrono = { workspace = true }
 dirs = { workspace = true }
 anyhow = { workspace = true }
 textwrap = "0.16"
+regex = { workspace = true }
 
 # HTTP (for setup wizard connection test)
 ureq = "2.9"
+
+# Syntax Highlighting & Markdown
+syntect = { workspace = true }
+pulldown-cmark = { workspace = true }
+
+# Clipboard
+arboard = { workspace = true }

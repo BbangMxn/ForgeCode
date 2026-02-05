@@ -1,9 +1,27 @@
 //! ForgeCode CLI - Main entry point
 
 mod cli;
+mod clipboard;
+mod cost;
+mod diff;
+mod history;
+mod hooks;
 mod init;
+mod markdown;
+mod session;
 mod setup;
+mod syntax;
 mod tui;
+
+// Re-exports
+pub use clipboard::ClipboardManager;
+pub use cost::CostTracker;
+pub use diff::{DiffGenerator, DiffRenderer, StreamingDiff};
+pub use history::HistoryManager;
+pub use hooks::{HookManager, HookEvent, HookContext, HookResult};
+pub use markdown::MarkdownRenderer;
+pub use session::SessionManager;
+pub use syntax::SyntaxHighlighter;
 
 use clap::{Parser, Subcommand};
 use forge_foundation::{provider_store, ProviderConfig, ProviderType};

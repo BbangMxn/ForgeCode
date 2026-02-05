@@ -7,6 +7,8 @@
 //! - Context 압축 상태 표시
 //! - Claude Code 스타일 UI
 
+use crate::cost::CostTracker;
+use crate::session::{SavedMessage, SavedToolCall, SessionManager};
 use crate::tui::components::{ModelSwitcher, ModelSwitcherAction, PermissionModalManager};
 use crate::tui::widgets::{
     AgentStatus, ChatMessage, ChatView, ChatViewState, Header, HeaderState, InputArea, InputState,
@@ -14,6 +16,7 @@ use crate::tui::widgets::{
     WelcomeScreen,
 };
 use crate::tui::{current_theme, HelpOverlay, Theme};
+use chrono::Local;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use forge_agent::{Agent, AgentContext, AgentEvent, MessageHistory, SteeringHandle};
 use forge_core::ToolRegistry;
@@ -63,6 +66,12 @@ pub struct ChatPage {
     show_help: bool,
     /// Model switcher component
     model_switcher: ModelSwitcher,
+
+    // === 새로운 기능 ===
+    /// Cost tracker
+    cost_tracker: CostTracker,
+    /// Session manager
+    session_manager: SessionManager,
 }
 
 impl ChatPage {
@@ -87,6 +96,8 @@ impl ChatPage {
             permission_modal: PermissionModalManager::new(),
             show_help: false,
             model_switcher: ModelSwitcher::new(),
+            cost_tracker: CostTracker::new(),
+            session_manager: SessionManager::new(),
         }
     }
 
@@ -334,6 +345,38 @@ impl ChatPage {
                 );
                 self.chat.push(ChatMessage::system(status));
             }
+            "/cost" => {
+                let summary = self.cost_tracker.summary();
+                let session_cost = self.cost_tracker.format_cost(summary.session.cost_usd);
+                let today_cost = self.cost_tracker.format_cost(summary.today.cost_usd);
+                let month_cost = self.cost_tracker.format_cost(summary.month.cost_usd);
+                
+                let cost_info = format!(
+                    "💰 **Cost Summary**\n\
+                     • Session: {} ({} tokens)\n\
+                     • Today: {} ({} requests)\n\
+                     • Month: {}",
+                    session_cost, summary.session.total_tokens(),
+                    today_cost, summary.today.requests,
+                    month_cost
+                );
+                self.chat.push(ChatMessage::system(cost_info));
+            }
+            "/sessions" => {
+                let sessions = self.session_manager.list_sessions();
+                if sessions.is_empty() {
+                    self.chat.push(ChatMessage::system("No saved sessions found."));
+                } else {
+                    let mut info = String::from("📋 **Recent Sessions**\n");
+                    for (i, session) in sessions.iter().take(5).enumerate() {
+                        let name = session.name.as_deref().unwrap_or(&session.id[..8]);
+                        let time = session.updated_at.format("%m-%d %H:%M");
+                        info.push_str(&format!("{}. {} ({}) - {} msgs\n", 
+                            i + 1, name, time, session.message_count));
+                    }
+                    self.chat.push(ChatMessage::system(info));
+                }
+            }
             _ => {
                 self.chat
                     .push(ChatMessage::system(format!("Unknown command: {}", command)));
@@ -520,6 +563,19 @@ impl ChatPage {
                 self.header.tokens.0 += input_tokens;
                 self.header.tokens.1 += output_tokens;
                 self.header.context_usage = (self.header.tokens.0 as f32) / 200_000.0;
+
+                // 비용 추적
+                let cost = self.cost_tracker.record_usage(
+                    &self.header.model,
+                    input_tokens as u64,
+                    output_tokens as u64,
+                    0, // cached tokens
+                );
+
+                // 예산 경고 확인
+                if let Some(warning) = self.cost_tracker.check_budget() {
+                    self.status_bar.warning(&warning.message());
+                }
             }
         }
     }
