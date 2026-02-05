@@ -406,7 +406,7 @@ impl ContextCompressor {
         }
 
         // 목표 토큰 수 계산
-        let target_tokens = (self.config.max_context_tokens as f32
+        let _target_tokens = (self.config.max_context_tokens as f32
             * self.config.target_usage_after_compress) as usize;
 
         // 메시지 가져오기

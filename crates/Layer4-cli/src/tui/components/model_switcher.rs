@@ -8,6 +8,8 @@
 //! - Quick keyboard shortcuts for common models
 //! - Visual indicator of current model
 
+#![allow(dead_code)]
+
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},

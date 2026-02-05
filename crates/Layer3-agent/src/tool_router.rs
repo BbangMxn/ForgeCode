@@ -23,7 +23,6 @@
 //! - docker run (detached)
 //! ```
 
-use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 /// 도구 선택 힌트

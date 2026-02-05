@@ -5,6 +5,8 @@
 //! - 필터 훅 (입출력 변환)
 //! - 커스텀 도구 등록
 
+#![allow(dead_code)]
+
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;

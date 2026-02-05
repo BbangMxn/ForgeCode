@@ -13,7 +13,7 @@
 //! 4. **Privilege Escalation Detection**: 권한 상승 시도 탐지
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 /// 소스 태그 - 명령/데이터의 출처 구분
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

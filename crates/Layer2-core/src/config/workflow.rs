@@ -34,7 +34,6 @@
 //! ```
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
 
 // ============================================================================
 // Git Workflow Configuration

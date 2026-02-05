@@ -41,6 +41,7 @@ use tracing::{debug, info};
 ///
 /// Layer3의 Agent를 AgentProvider 인터페이스로 래핑합니다.
 /// 이를 통해 다른 프로바이더(Claude SDK, Codex)와 동일한 방식으로 사용할 수 있습니다.
+#[allow(dead_code)]
 pub struct ForgeNativeProvider {
     /// Agent context
     ctx: Arc<AgentContext>,
@@ -102,6 +103,7 @@ impl ForgeNativeProvider {
     }
 
     /// Update session data
+    #[allow(dead_code)]
     async fn update_session(
         &self,
         session_id: &str,
@@ -125,7 +127,7 @@ impl ForgeNativeProvider {
     }
 
     /// Convert AgentEvent to AgentStreamEvent
-    fn convert_event(event: AgentEvent, session_id: &str) -> Option<AgentStreamEvent> {
+    fn convert_event(event: AgentEvent, _session_id: &str) -> Option<AgentStreamEvent> {
         match event {
             AgentEvent::Text(text) => Some(AgentStreamEvent::Text(text)),
 
@@ -284,7 +286,7 @@ impl AgentProvider for ForgeNativeProvider {
 
         // Clone for async move
         let prompt = prompt.to_string();
-        let ctx = self.ctx.clone();
+        let _ctx = self.ctx.clone();
         let session_data_arc = self.session_data.clone();
 
         // Spawn agent execution
@@ -310,19 +312,19 @@ impl AgentProvider for ForgeNativeProvider {
                 provider: AgentProviderType::Native,
             };
 
-            let mut total_turns = 0u32;
-            let mut final_response = String::new();
+            let mut _total_turns = 0u32;
+            let mut _final_response = String::new();
 
             // Stream events
             while let Some(event) = event_rx.recv().await {
                 // Track turns
                 if let AgentEvent::TurnComplete { turn } = &event {
-                    total_turns = *turn;
+                    _total_turns = *turn;
                 }
 
                 // Track final response
                 if let AgentEvent::Done { full_response } = &event {
-                    final_response = full_response.clone();
+                    _final_response = full_response.clone();
                 }
 
                 // Convert and yield event

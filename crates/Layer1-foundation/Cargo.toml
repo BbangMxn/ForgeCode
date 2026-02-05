@@ -37,3 +37,9 @@ hostname = "0.4"
 
 # HTTP Client (for tokenizer)
 reqwest = { workspace = true }
+
+[features]
+default = []
+tiktoken = []
+hf-tokenizers = []
+blocking-http = []

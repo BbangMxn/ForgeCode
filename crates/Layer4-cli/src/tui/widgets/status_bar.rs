@@ -6,6 +6,8 @@
 //! └─────────────────────────────────────────────────────────────────┘
 //! ```
 
+#![allow(dead_code)]
+
 use ratatui::{
     buffer::Buffer,
     layout::{Alignment, Constraint, Direction, Layout, Rect},

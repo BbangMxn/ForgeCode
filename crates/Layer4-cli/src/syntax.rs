@@ -2,6 +2,8 @@
 //!
 //! syntect를 사용한 터미널 친화적 구문 강조
 
+#![allow(dead_code)]
+
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use std::collections::HashMap;

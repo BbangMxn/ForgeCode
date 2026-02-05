@@ -6,6 +6,8 @@
 //! - Summarizing: 오래된 내용 요약
 //! - RAG: 검색 증강 메모리
 
+#![allow(dead_code)]
+
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use forge_foundation::Result;

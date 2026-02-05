@@ -186,6 +186,7 @@ pub use optimizer::{
     since = "0.2.0",
     note = "Use forge_foundation::cache::ContextCompactor instead"
 )]
+#[allow(deprecated)]
 pub type ContextCompactor = optimizer::ContextCompactor;
 
 // Runtime exports (deprecated)

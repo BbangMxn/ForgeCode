@@ -26,7 +26,6 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tokio::fs;
-use tracing::{debug, info, warn};
 
 /// 진행 상황 항목
 #[derive(Debug, Clone, Serialize, Deserialize)]

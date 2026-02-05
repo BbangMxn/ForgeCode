@@ -30,7 +30,7 @@ impl JsonStore {
         Self::new(root.into().join(".forgecode"))
     }
 
-    /// 현재 디렉토리 프로젝트 설정
+    /// 현재 디렉토리 프로젝트 설정 (.forgecode/ 만 사용)
     pub fn current_project() -> Result<Self> {
         let cwd = std::env::current_dir()
             .map_err(|e| Error::Config(format!("Cannot get current directory: {}", e)))?;

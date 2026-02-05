@@ -9,10 +9,8 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::Duration;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 /// Error types that can be recovered from
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -415,7 +413,7 @@ impl RecoveryStrategy for TimeoutRecovery {
 
     async fn recover(
         &self,
-        error: &RecoverableError,
+        _error: &RecoverableError,
         context: &RecoveryContext,
     ) -> RecoveryAction {
         if context.retry_count < 2 {
@@ -505,7 +503,7 @@ impl RecoveryStrategy for NetworkErrorRecovery {
 
     async fn recover(
         &self,
-        error: &RecoverableError,
+        _error: &RecoverableError,
         context: &RecoveryContext,
     ) -> RecoveryAction {
         if context.retry_count < 3 {
@@ -553,10 +551,11 @@ mod tests {
     #[tokio::test]
     async fn test_file_not_found_recovery() {
         let recovery = FileNotFoundRecovery::new();
+        // Only provide one similar file to ensure auto-correction (Retry)
         let context = RecoveryContext {
             available_files: vec![
                 "src/main.rs".to_string(),
-                "src/lib.rs".to_string(),
+                "src/utils.rs".to_string(), // very different, won't match
             ],
             original_input: json!({"path": "src/mian.rs"}),
             ..Default::default()
@@ -567,7 +566,29 @@ mod tests {
         };
 
         let action = recovery.recover(&error, &context).await;
-        // Should suggest main.rs
+        // Should auto-correct to main.rs (only one suggestion)
         assert!(matches!(action, RecoveryAction::Retry { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_file_not_found_multiple_suggestions() {
+        let recovery = FileNotFoundRecovery::new();
+        // Provide multiple similar files to trigger AskUser
+        let context = RecoveryContext {
+            available_files: vec![
+                "src/main.rs".to_string(),
+                "src/mein.rs".to_string(), // also similar to "mian.rs"
+            ],
+            original_input: json!({"path": "src/mian.rs"}),
+            ..Default::default()
+        };
+
+        let error = RecoverableError::FileNotFound {
+            path: "src/mian.rs".to_string(),
+        };
+
+        let action = recovery.recover(&error, &context).await;
+        // Should ask user when multiple suggestions
+        assert!(matches!(action, RecoveryAction::AskUser { .. }));
     }
 }

@@ -65,8 +65,9 @@ pub struct ToolCall {
 }
 
 /// Parallel tool executor with dependency analysis
+#[allow(dead_code)]
 pub struct ParallelToolExecutor {
-    /// Maximum concurrent executions
+    /// Maximum concurrent executions (kept for configuration reference)
     max_concurrent: usize,
     /// Semaphore for limiting concurrency
     semaphore: Arc<Semaphore>,

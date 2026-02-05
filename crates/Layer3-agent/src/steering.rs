@@ -427,6 +427,7 @@ pub enum SteeringError {
 // ============================================================================
 
 /// 스티어링 가능한 Agent 트레이트
+#[allow(async_fn_in_trait)]
 pub trait Steerable {
     /// 스티어링 체커 가져오기
     fn steering(&self) -> &SteeringChecker;

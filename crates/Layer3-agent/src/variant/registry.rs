@@ -2,7 +2,9 @@
 //!
 //! Agent 변형들을 등록하고 관리하는 레지스트리입니다.
 
-use crate::runtime::{AgentMetadata, AgentRuntime, RuntimeConfig};
+#![allow(dead_code)]
+
+use crate::runtime::{AgentRuntime, RuntimeConfig};
 use forge_foundation::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

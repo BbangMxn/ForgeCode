@@ -3,6 +3,8 @@
 //! Displays running tasks with progress bars.
 //! Implements Layer1's TaskObserver trait for TUI.
 
+#![allow(dead_code)]
+
 use forge_foundation::core::traits::{TaskObserver, TaskResult, TaskState};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},

@@ -1,8 +1,11 @@
 //! Tokenizer Factory - 모델별 토크나이저 생성
 
+// TODO: This module will be used for global tokenizer access
+#![allow(dead_code)]
+
 use super::estimator::{ClaudeEstimator, GeminiEstimator, LlamaEstimator, TiktokenEstimator};
 use super::traits::Tokenizer;
-use super::types::{ModelTokenConfig, TokenBudget, TokenizerError, TokenizerType};
+use super::types::{ModelTokenConfig, TokenBudget, TokenizerType};
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock, RwLock};
 

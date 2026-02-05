@@ -3,7 +3,7 @@
 //! `cargo test -p forge-task --test pty_test -- --nocapture`
 
 use forge_task::{
-    ExecutionMode, Task, TaskId, TaskOrchestrator, OrchestratorConfig, WaitCondition, WaitResult,
+    ExecutionMode, Task, TaskOrchestrator, OrchestratorConfig, WaitCondition, WaitResult,
 };
 use std::time::Duration;
 use tokio;

@@ -12,6 +12,8 @@
 //!    └─── Retry/Modify ←──────┘
 //! ```
 
+#![allow(dead_code)]
+
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 

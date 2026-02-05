@@ -3,6 +3,8 @@
 //! Tree-of-Thought 기반 탐색 Agent입니다.
 //! 여러 추론 경로를 탐색하고 최적의 경로를 선택합니다.
 
+#![allow(dead_code)]
+
 use super::registry::{AgentVariantInfo, BuiltinVariant, StrategiesInfo, VariantCategory};
 use crate::runtime::{
     AgentCapability, AgentMetadata, AgentRuntime, ExecuteOutput, PlanOutput, ReflectOutput,

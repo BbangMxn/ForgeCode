@@ -56,6 +56,7 @@ impl Default for PtySizeConfig {
 }
 
 /// PTY session state
+#[allow(dead_code)]
 struct PtySessionState {
     /// PTY pair (master + slave)
     pty: Option<PtyPair>,
@@ -63,13 +64,13 @@ struct PtySessionState {
     /// Child process handle
     child: Option<Box<dyn portable_pty::Child + Send + Sync>>,
 
-    /// Task ID
+    /// Task ID (kept for logging/debugging)
     task_id: String,
 
-    /// Command being executed
+    /// Command being executed (kept for logging/debugging)
     command: String,
 
-    /// Start time
+    /// Start time (kept for metrics/debugging)
     started_at: Instant,
 
     /// Kill requested flag
@@ -244,6 +245,12 @@ pub struct PtyExecutorConfig {
 
     /// Environment security configuration
     pub env_security: PtyEnvSecurityConfig,
+
+    /// Shell command policy (command-level permission control)
+    pub shell_policy: super::shell_policy::ShellPolicy,
+
+    /// Enable command validation before execution
+    pub enable_command_validation: bool,
 }
 
 impl Default for PtyExecutorConfig {
@@ -259,6 +266,8 @@ impl Default for PtyExecutorConfig {
             shell,
             default_timeout: Duration::from_secs(300),
             env_security: PtyEnvSecurityConfig::default(),
+            shell_policy: super::shell_policy::ShellPolicy::default(),
+            enable_command_validation: true,
         }
     }
 }
@@ -279,6 +288,30 @@ impl PtyExecutorConfig {
     /// Add allowed patterns
     pub fn allow_env_patterns(mut self, patterns: Vec<String>) -> Self {
         self.env_security.allowed_patterns.extend(patterns);
+        self
+    }
+
+    /// Set shell policy for command validation
+    pub fn with_shell_policy(mut self, policy: super::shell_policy::ShellPolicy) -> Self {
+        self.shell_policy = policy;
+        self
+    }
+
+    /// Enable or disable command validation
+    pub fn with_command_validation(mut self, enable: bool) -> Self {
+        self.enable_command_validation = enable;
+        self
+    }
+
+    /// Use strict shell policy
+    pub fn with_strict_policy(mut self) -> Self {
+        self.shell_policy = super::shell_policy::ShellPolicy::strict();
+        self
+    }
+
+    /// Use permissive shell policy
+    pub fn with_permissive_policy(mut self) -> Self {
+        self.shell_policy = super::shell_policy::ShellPolicy::permissive();
         self
     }
 }
@@ -326,6 +359,31 @@ impl PtyExecutor {
     /// Get the log manager
     pub fn log_manager(&self) -> Arc<TaskLogManager> {
         Arc::clone(&self.log_manager)
+    }
+
+    /// Validate command against shell policy
+    ///
+    /// Returns Ok(()) if command is allowed, Err with reason if denied.
+    /// If command requires approval, returns Err with the reason for UI to prompt user.
+    pub fn validate_command(&self, command: &str) -> Result<super::shell_policy::PolicyResult> {
+        if !self.config.enable_command_validation {
+            return Ok(super::shell_policy::PolicyResult::Allow);
+        }
+
+        let result = self.config.shell_policy.validate(command);
+        Ok(result)
+    }
+
+    /// Check if a command is safe to execute (convenience method)
+    pub fn is_command_safe(&self, command: &str) -> bool {
+        if !self.config.enable_command_validation {
+            return true;
+        }
+
+        matches!(
+            self.config.shell_policy.validate(command),
+            super::shell_policy::PolicyResult::Allow
+        )
     }
 
     /// Get active sessions
@@ -412,6 +470,31 @@ impl PtyExecutor {
     /// Spawn a task in background (returns immediately)
     /// Use get_logs() to retrieve output, force_kill() to terminate
     pub async fn spawn_background(&self, task: &Task) -> Result<()> {
+        // Validate command against shell policy before execution
+        if self.config.enable_command_validation {
+            match self.config.shell_policy.validate(&task.command) {
+                super::shell_policy::PolicyResult::Allow => {
+                    debug!("Background command passed policy validation: {}", task.command);
+                }
+                super::shell_policy::PolicyResult::Deny(reason) => {
+                    warn!("Background command denied by policy: {} - {}", task.command, reason);
+                    return Err(Error::PermissionDenied(format!(
+                        "Command blocked by shell policy: {}", reason
+                    )));
+                }
+                super::shell_policy::PolicyResult::RequiresApproval(reason) => {
+                    // For background tasks, deny commands that require approval
+                    warn!("Background command requires approval: {} - {}", task.command, reason);
+                    return Err(Error::PermissionDenied(format!(
+                        "Background command requires approval (not supported): {}", reason
+                    )));
+                }
+                super::shell_policy::PolicyResult::Sandbox(reason) => {
+                    info!("Background command recommended for sandbox: {} - {}", task.command, reason);
+                }
+            }
+        }
+
         let task_id = task.id.to_string();
         let pty_system = native_pty_system();
 
@@ -681,6 +764,33 @@ impl PtyExecutor {
     /// Execute command in PTY (synchronous - waits for completion)
     /// For long-running processes, use spawn_background() instead
     async fn execute_in_pty(&self, task: &Task) -> Result<TaskResult> {
+        // Validate command against shell policy before execution
+        if self.config.enable_command_validation {
+            match self.config.shell_policy.validate(&task.command) {
+                super::shell_policy::PolicyResult::Allow => {
+                    debug!("Command passed policy validation: {}", task.command);
+                }
+                super::shell_policy::PolicyResult::Deny(reason) => {
+                    warn!("Command denied by policy: {} - {}", task.command, reason);
+                    return Err(Error::PermissionDenied(format!(
+                        "Command blocked by shell policy: {}", reason
+                    )));
+                }
+                super::shell_policy::PolicyResult::RequiresApproval(reason) => {
+                    // For now, log and deny. In future, this could trigger a UI prompt.
+                    warn!("Command requires approval: {} - {}", task.command, reason);
+                    return Err(Error::PermissionDenied(format!(
+                        "Command requires approval: {}", reason
+                    )));
+                }
+                super::shell_policy::PolicyResult::Sandbox(reason) => {
+                    // Log that sandbox execution is recommended
+                    info!("Command recommended for sandbox execution: {} - {}", task.command, reason);
+                    // Continue execution but log the recommendation
+                }
+            }
+        }
+
         let task_id = task.id.to_string();
         let pty_system = native_pty_system();
 

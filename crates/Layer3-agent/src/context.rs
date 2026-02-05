@@ -19,7 +19,7 @@ use forge_foundation::permission::PermissionService;
 use forge_foundation::env_detect::Environment;
 use forge_foundation::Result;
 use forge_provider::Gateway;
-use forge_task::{TaskManager, TaskState, Task, ExecutionMode};
+use forge_task::{TaskManager, Task, ExecutionMode};
 use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -668,5 +668,5 @@ Choose verification level based on impact:
 
 **Always verify after making changes. If verification fails, fix the issue before proceeding.**
 
-You have access to various tools to help accomplish tasks. Use them effectively."#, env_info = env_info)
+You have access to various tools to help accomplish tasks. Use them effectively."#, env_info)
 }

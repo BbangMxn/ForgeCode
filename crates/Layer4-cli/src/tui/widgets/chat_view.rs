@@ -18,6 +18,8 @@
 //!  └────────────────────────────────────────────────────┘
 //! ```
 
+#![allow(dead_code)]
+
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -494,7 +496,7 @@ impl<'a> ChatView<'a> {
         let mut chars = text.char_indices().peekable();
         let mut current_text = String::new();
 
-        while let Some((i, ch)) = chars.next() {
+        while let Some((_i, ch)) = chars.next() {
             match ch {
                 '`' => {
                     // 현재 텍스트 플러시
@@ -736,7 +738,7 @@ fn parse_heading(line: &str) -> (usize, &str) {
 }
 
 /// 헤딩 스타일
-fn heading_style(level: usize, theme: &Theme) -> Style {
+fn heading_style(level: usize, _theme: &Theme) -> Style {
     match level {
         1 => Style::default()
             .fg(Color::Magenta)

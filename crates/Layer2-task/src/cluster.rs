@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 /// Server status
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -236,8 +236,10 @@ pub trait HealthChecker: Send + Sync {
 }
 
 /// Default HTTP health checker
+#[allow(dead_code)]
 pub struct HttpHealthChecker {
     client: reqwest::Client,
+    /// Timeout for health checks (kept for future use)
     timeout: Duration,
 }
 

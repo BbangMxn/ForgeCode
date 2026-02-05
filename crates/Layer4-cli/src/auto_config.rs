@@ -5,6 +5,8 @@
 //! - 프로바이더 자동 감지 (Ollama, API 키 등)
 //! - 프로젝트 타입 감지 (Rust, Python, Node.js 등)
 
+#![allow(dead_code)]
+
 use std::collections::HashMap;
 use std::env;
 use std::process::Command;
@@ -235,7 +237,7 @@ impl EnvironmentInfo {
             "http://127.0.0.1:11434",
         ];
 
-        for endpoint in endpoints {
+        for _endpoint in endpoints {
             // 간단히 연결 시도 (실제로는 비동기 요청이 필요)
             // 여기서는 환경 변수나 프로세스 존재 여부로 판단
             if let Ok(ollama_host) = env::var("OLLAMA_HOST") {

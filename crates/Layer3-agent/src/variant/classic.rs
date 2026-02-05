@@ -2,13 +2,15 @@
 //!
 //! 기본 Agent 구현입니다. 단순 추론과 순차 실행을 사용합니다.
 
+#![allow(dead_code)]
+
 use super::registry::{AgentVariantInfo, BuiltinVariant, StrategiesInfo, VariantCategory};
 use crate::runtime::{
-    AgentCapability, AgentMetadata, AgentRuntime, ExecuteOutput, PlanOutput, ReflectOutput,
+    AgentCapability, AgentMetadata, AgentRuntime, ExecuteOutput, PlanOutput,
     RuntimeConfig, RuntimeContext, ThinkOutput,
 };
 use crate::strategy::{
-    ExecutionStrategy, MemoryStrategy, PlanningContext, PlanningStrategy, ReasoningContext,
+    PlanningContext, PlanningStrategy, ReasoningContext,
     ReasoningStrategy, SequentialExecution, SimplePlanning, SimpleReasoning, SlidingWindowMemory,
 };
 use async_trait::async_trait;

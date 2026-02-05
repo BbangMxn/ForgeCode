@@ -29,8 +29,13 @@ pub use executor::{
     ContainerExecutor, Executor, LocalExecutor, PtyEnvSecurityConfig, PtyExecutor,
     PtyExecutorConfig, PtySizeConfig, SandboxConfig, SandboxExecutor, SandboxPolicy, SandboxResult,
     SandboxType,
+    // Shell command policy
+    PolicyResult, RiskLevel, ShellPolicy, TaskShellPolicy,
+    // Resource monitoring
+    LimitExceededAction, ProcessResourceLimits, ProcessResourceTracker,
+    ResourceMonitor, ResourceSnapshot, ResourceViolation, ViolationType,
 };
-pub use manager::{ResourceStats, TaskManager, TaskManagerConfig, TaskStatus};
+pub use manager::{ProgressHint, ResourceStats, TaskManager, TaskManagerConfig, TaskProgressReport, TaskStatus};
 pub use state::TaskState;
 pub use task::{ExecutionMode, Task, TaskId, TaskResult};
 

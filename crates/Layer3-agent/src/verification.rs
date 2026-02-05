@@ -1,6 +1,8 @@
 //! Verification Module - OpenCode 스타일 철저한 검증
 //!
 //! 변경 후 자동 검증:
+#![allow(dead_code)]
+//!
 //! - 빌드 확인
 //! - 테스트 실행
 //! - 타입 체크

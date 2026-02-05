@@ -4,7 +4,7 @@
 //! 이를 통해 토큰 예산 내에서 가장 관련 있는 파일을 선택합니다.
 
 use super::graph::DependencyGraph;
-use super::types::{FileInfo, RepoMap, SymbolKind};
+use super::types::{RepoMap, SymbolKind};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -276,7 +276,7 @@ impl Default for FileRanker {
 
 #[cfg(test)]
 mod tests {
-    use super::super::types::SymbolDef;
+    use super::super::types::{FileInfo, SymbolDef, SymbolKind};
     use super::*;
 
     #[test]

@@ -108,14 +108,15 @@ pub enum TimeoutState {
 }
 
 /// Running process info
+#[allow(dead_code)]
 struct ProcessInfo {
     /// Child process handle
     child: Child,
 
-    /// Task ID
+    /// Task ID (kept for debugging/logging)
     task_id: String,
 
-    /// Start time
+    /// Start time (kept for metrics/debugging)
     started_at: std::time::Instant,
 
     /// Kill flag
@@ -290,7 +291,9 @@ impl LocalExecutor {
     }
 
     /// Send graceful termination signal (SIGTERM on Unix, TerminateProcess on Windows)
+    /// Note: This function is kept for future graceful shutdown implementation
     #[cfg(unix)]
+    #[allow(dead_code)]
     async fn send_sigterm(child: &Child) -> Result<()> {
         use nix::sys::signal::{kill, Signal};
         use nix::unistd::Pid;
@@ -303,7 +306,8 @@ impl LocalExecutor {
     }
 
     #[cfg(windows)]
-    async fn send_sigterm(child: &Child) -> Result<()> {
+    #[allow(dead_code)]
+    async fn send_sigterm(_child: &Child) -> Result<()> {
         // Windows doesn't have SIGTERM, we'll use a softer approach
         // by sending Ctrl+C event or just logging and proceeding to kill
         debug!("Windows doesn't support SIGTERM, will use kill");

@@ -2,6 +2,8 @@
 //!
 //! 코드 블록 복사 등 클립보드 작업 처리
 
+#![allow(dead_code)]
+
 use std::sync::OnceLock;
 
 /// 클립보드 매니저

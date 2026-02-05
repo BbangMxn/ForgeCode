@@ -7,6 +7,8 @@
 //! - Context 압축 상태 표시
 //! - Claude Code 스타일 UI
 
+#![allow(dead_code)]
+
 use crate::cost::CostTracker;
 use crate::session::SessionManager;
 use crate::tui::components::{ModelSwitcher, ModelSwitcherAction, PermissionModalManager};
@@ -570,7 +572,7 @@ impl ChatPage {
                 self.header.context_usage = (self.header.tokens.0 as f32) / 200_000.0;
 
                 // 비용 추적
-                let cost = self.cost_tracker.record_usage(
+                let _cost = self.cost_tracker.record_usage(
                     &self.header.model,
                     input_tokens as u64,
                     output_tokens as u64,

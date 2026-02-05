@@ -32,15 +32,15 @@
 
 use crate::log::{LogEntry, LogLevel, TaskLogManager};
 use crate::manager::TaskManager;
-use crate::task::{Task, TaskId, TaskResult};
+use crate::task::{Task, TaskId};
 use chrono::{DateTime, Utc};
 use forge_foundation::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{broadcast, mpsc, oneshot, RwLock};
-use tracing::{debug, error, info, warn};
+use tokio::sync::{broadcast, mpsc, RwLock};
+use tracing::info;
 
 // ============================================================================
 // Task Group (Task들의 논리적 그룹)

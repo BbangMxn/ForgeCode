@@ -5,7 +5,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use thiserror::Error;
-use tracing::{debug, info, warn};
+use tracing::info;
 
 // ============================================================================
 // Error Types
@@ -293,7 +293,7 @@ impl GitOps {
             return Err(GitError::NothingToCommit);
         }
 
-        let output = self.run_git(&["commit", "-m", message])?;
+        let _output = self.run_git(&["commit", "-m", message])?;
 
         // Extract commit hash
         let hash = self.run_git(&["rev-parse", "--short", "HEAD"])?;
@@ -431,7 +431,6 @@ pub struct LogEntry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::env::temp_dir;
 
     #[test]
     fn test_git_status_is_clean() {

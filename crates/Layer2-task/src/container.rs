@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
-use tracing::{debug, error, info, warn};
+use tracing::info;
 
 /// Container runtime type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -293,7 +293,8 @@ impl ContainerConfig {
     }
 
     /// Build docker run arguments
-    pub fn build_args(&self, runtime: ContainerRuntime) -> Vec<String> {
+    /// Note: runtime is kept for future runtime-specific argument handling
+    pub fn build_args(&self, _runtime: ContainerRuntime) -> Vec<String> {
         let mut args = vec![];
 
         // Auto-remove

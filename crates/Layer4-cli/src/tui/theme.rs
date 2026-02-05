@@ -2,6 +2,9 @@
 //!
 //! Claude Code 스타일의 깔끔하고 모던한 디자인
 
+#![allow(dead_code)]
+#![allow(unused_variables)]
+
 use ratatui::style::{Color, Modifier, Style};
 
 /// ForgeCode 테마
@@ -237,7 +240,7 @@ impl Default for Theme {
     }
 }
 
-/// 글로벌 테마 (lazy_static 대신 thread_local 사용)
+// 글로벌 테마 (lazy_static 대신 thread_local 사용)
 thread_local! {
     static CURRENT_THEME: std::cell::RefCell<Theme> = std::cell::RefCell::new(Theme::dark());
 }

@@ -11,6 +11,8 @@
 //! └── HANDOFF.md           # 세션 간 핸드오프 문서
 //! ```
 
+#![allow(dead_code)]
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

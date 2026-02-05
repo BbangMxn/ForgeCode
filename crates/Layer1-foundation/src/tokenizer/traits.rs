@@ -1,5 +1,7 @@
 //! Tokenizer Trait 정의
 
+#![allow(dead_code)]
+
 use super::types::{EncodingResult, TokenCount, TokenizerError, TokenizerType};
 
 /// 토크나이저 트레이트

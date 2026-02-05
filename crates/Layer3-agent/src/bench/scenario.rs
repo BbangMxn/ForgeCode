@@ -2,6 +2,8 @@
 //!
 //! 테스트 시나리오 정의 및 관리
 
+#![allow(dead_code)]
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 

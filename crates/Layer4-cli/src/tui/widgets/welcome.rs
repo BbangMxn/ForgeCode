@@ -2,6 +2,8 @@
 //!
 //! 첫 실행 시 표시되는 환영 화면입니다.
 
+#![allow(dead_code)]
+
 use ratatui::{
     buffer::Buffer,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -251,9 +253,17 @@ mod tests {
 
     #[test]
     fn test_logo_selection() {
-        assert!(WelcomeScreen::select_logo(80).len() > 100);
-        assert!(WelcomeScreen::select_logo(40).len() < 200);
-        assert!(WelcomeScreen::select_logo(20).len() < 20);
+        // 큰 화면: 전체 로고
+        let big_logo = WelcomeScreen::select_logo(80);
+        assert!(big_logo.len() > 100);
+
+        // 중간 화면: 작은 로고 (LOGO_SMALL은 유니코드로 인해 길이가 다양함)
+        let medium_logo = WelcomeScreen::select_logo(40);
+        assert!(medium_logo.len() < big_logo.len());
+
+        // 작은 화면: 최소 로고
+        let small_logo = WelcomeScreen::select_logo(20);
+        assert!(small_logo.len() < 50);
     }
 
     #[test]

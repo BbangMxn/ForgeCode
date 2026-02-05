@@ -17,9 +17,11 @@
 //! let count = tokenizer.count("Hello!").await;
 //! ```
 
+#![allow(dead_code)]
+
 use super::traits::Tokenizer;
 use super::types::{EncodingResult, TokenCount, TokenizerError, TokenizerType};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 

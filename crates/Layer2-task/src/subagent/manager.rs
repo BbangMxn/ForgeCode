@@ -75,8 +75,9 @@ impl Default for QueuePriority {
 
 /// A queued spawn request
 #[derive(Debug)]
+#[allow(dead_code)]
 struct QueuedSpawn {
-    /// Queue entry ID
+    /// Queue entry ID (kept for debugging/logging)
     id: u64,
     /// Agent ID
     agent_id: SubAgentId,

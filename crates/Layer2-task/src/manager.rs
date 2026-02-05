@@ -678,6 +678,144 @@ impl TaskManager {
         count
     }
 
+    /// 특정 Task의 상세 진행 상태 조회
+    pub async fn get_progress_report(&self, task_id: TaskId) -> Option<TaskProgressReport> {
+        let tasks = self.tasks.read().await;
+        let task = tasks.get(&task_id)?;
+
+        // 최근 로그 가져오기
+        let logs = self.get_logs(task_id, Some(5)).await;
+        let recent_output: Vec<String> = logs
+            .iter()
+            .map(|l| l.content.chars().take(100).collect())
+            .collect();
+
+        // 에러 수 계산
+        let errors = self.get_errors(task_id).await;
+        let error_count = errors.len();
+
+        // 실행 시간 계산
+        let elapsed_ms = task
+            .started_at
+            .map(|start| {
+                (chrono::Utc::now() - start).num_milliseconds().max(0) as u64
+            })
+            .unwrap_or(0);
+
+        // 진행률 힌트 추출 (특정 패턴에서)
+        let progress_hint = self.extract_progress_hint(&recent_output, &task.command);
+
+        Some(TaskProgressReport {
+            task_id,
+            session_id: task.session_id.clone(),
+            tool_name: task.tool_name.clone(),
+            command: task.command.clone(),
+            state: task.state.clone(),
+            elapsed_ms,
+            recent_output,
+            error_count,
+            progress_hint,
+        })
+    }
+
+    /// 모든 실행 중인 Task의 진행 상태 조회
+    pub async fn get_all_progress_reports(&self) -> Vec<TaskProgressReport> {
+        let running_ids = self.get_running_tasks().await;
+        let mut reports = Vec::with_capacity(running_ids.len());
+
+        for task_id in running_ids {
+            if let Some(report) = self.get_progress_report(task_id).await {
+                reports.push(report);
+            }
+        }
+
+        reports
+    }
+
+    /// 출력에서 진행률 힌트 추출
+    fn extract_progress_hint(&self, output: &[String], command: &str) -> Option<ProgressHint> {
+        // npm/cargo 빌드 패턴 감지
+        for line in output.iter().rev() {
+            let line_lower = line.to_lowercase();
+
+            // npm 패턴: "added X packages"
+            if line_lower.contains("added") && line_lower.contains("packages") {
+                return Some(ProgressHint {
+                    percent: 100,
+                    current_operation: "Dependencies installed".to_string(),
+                    remaining_items: None,
+                });
+            }
+
+            // cargo 빌드 패턴: "Compiling X (Y/Z)"
+            if line_lower.contains("compiling") {
+                if let Some(progress) = self.parse_cargo_progress(line) {
+                    return Some(progress);
+                }
+                return Some(ProgressHint {
+                    percent: 50,
+                    current_operation: "Compiling...".to_string(),
+                    remaining_items: None,
+                });
+            }
+
+            // cargo test 패턴: "running X tests"
+            if line_lower.contains("running") && line_lower.contains("test") {
+                return Some(ProgressHint {
+                    percent: 80,
+                    current_operation: "Running tests".to_string(),
+                    remaining_items: None,
+                });
+            }
+
+            // 서버 시작 패턴
+            if line_lower.contains("listening") || line_lower.contains("started") {
+                return Some(ProgressHint {
+                    percent: 100,
+                    current_operation: "Server running".to_string(),
+                    remaining_items: None,
+                });
+            }
+        }
+
+        // 명령어에 따른 기본 힌트
+        if command.contains("npm install") || command.contains("yarn") {
+            return Some(ProgressHint {
+                percent: 25,
+                current_operation: "Installing dependencies".to_string(),
+                remaining_items: None,
+            });
+        }
+
+        None
+    }
+
+    /// Cargo 빌드 진행률 파싱
+    fn parse_cargo_progress(&self, line: &str) -> Option<ProgressHint> {
+        // "Compiling crate_name vX.Y.Z (current/total)"
+        // 간단한 구현 - 실제 파싱은 더 복잡할 수 있음
+        if let Some(start) = line.find('(') {
+            if let Some(end) = line.find(')') {
+                let nums: &str = &line[start + 1..end];
+                let parts: Vec<&str> = nums.split('/').collect();
+                if parts.len() == 2 {
+                    if let (Ok(current), Ok(total)) = (
+                        parts[0].trim().parse::<usize>(),
+                        parts[1].trim().parse::<usize>(),
+                    ) {
+                        let percent = ((current as f32 / total as f32) * 100.0) as u8;
+                        return Some(ProgressHint {
+                            percent,
+                            current_operation: format!("Compiling {}/{}", current, total),
+                            remaining_items: Some(total - current),
+                        });
+                    }
+                }
+            }
+        }
+        None
+    }
+
     /// 리소스 통계 조회
     pub async fn resource_stats(&self) -> ResourceStats {
         use std::sync::atomic::Ordering;
@@ -751,6 +889,73 @@ pub struct ResourceStats {
     pub failed: usize,
     /// 로그가 있는 태스크 수
     pub log_tasks: usize,
+}
+
+/// 상세 Task 진행 상태 리포트 - LLM이 작업 진행 상태를 파악할 수 있음
+#[derive(Debug, Clone)]
+pub struct TaskProgressReport {
+    /// 태스크 ID
+    pub task_id: TaskId,
+    /// 세션 ID
+    pub session_id: String,
+    /// 도구 이름
+    pub tool_name: String,
+    /// 실행 명령
+    pub command: String,
+    /// 현재 상태
+    pub state: TaskState,
+    /// 실행 시간 (밀리초)
+    pub elapsed_ms: u64,
+    /// 마지막 출력 라인 (최근 5줄)
+    pub recent_output: Vec<String>,
+    /// 에러 수
+    pub error_count: usize,
+    /// 추정 진행률 (있는 경우)
+    pub progress_hint: Option<ProgressHint>,
+}
+
+/// 진행률 힌트 - 특정 작업 패턴에서 추정된 진행률
+#[derive(Debug, Clone)]
+pub struct ProgressHint {
+    /// 진행률 (0-100)
+    pub percent: u8,
+    /// 현재 작업 설명
+    pub current_operation: String,
+    /// 남은 항목 수 (알 수 있는 경우)
+    pub remaining_items: Option<usize>,
+}
+
+impl TaskProgressReport {
+    /// LLM이 이해하기 쉬운 형식으로 포맷
+    pub fn format_for_llm(&self) -> String {
+        let mut output = format!(
+            "Task {} ({}): {}\n  Command: {}\n  Status: {:?}\n  Elapsed: {}ms",
+            self.task_id, self.tool_name, self.session_id, self.command, self.state, self.elapsed_ms
+        );
+
+        if self.error_count > 0 {
+            output.push_str(&format!("\n  Errors: {}", self.error_count));
+        }
+
+        if let Some(ref hint) = self.progress_hint {
+            output.push_str(&format!(
+                "\n  Progress: {}% - {}",
+                hint.percent, hint.current_operation
+            ));
+            if let Some(remaining) = hint.remaining_items {
+                output.push_str(&format!(" ({} remaining)", remaining));
+            }
+        }
+
+        if !self.recent_output.is_empty() {
+            output.push_str("\n  Recent output:");
+            for line in &self.recent_output {
+                output.push_str(&format!("\n    | {}", line));
+            }
+        }
+
+        output
+    }
 }
 
 #[cfg(test)]

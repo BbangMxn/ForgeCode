@@ -6,6 +6,8 @@
 //! - Hierarchical Planning: 계층적 계획
 //! - ReAct Planning: 반응형 계획
 
+#![allow(dead_code)]
+
 use async_trait::async_trait;
 use forge_foundation::Result;
 use serde::{Deserialize, Serialize};

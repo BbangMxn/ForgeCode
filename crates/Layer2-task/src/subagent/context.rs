@@ -1370,10 +1370,11 @@ impl SubAgentContext {
             let tool_count = self.tool_results.len();
             let to_remove_count = tool_count / 2; // Remove half
             tool_results_to_backup = self.tool_results.drain(..to_remove_count).collect();
-            removed_tokens += tool_results_to_backup
+            // Note: We track removed tokens for potential future metrics/logging
+            let _tool_tokens: usize = tool_results_to_backup
                 .iter()
                 .map(|r| r.token_count)
-                .sum::<usize>();
+                .sum();
         }
 
         // Create summary of removed messages

@@ -143,7 +143,8 @@ pub struct LspClient {
     /// 마지막 성공적인 요청 시간
     last_successful_request: RwLock<Option<std::time::Instant>>,
 
-    /// 프로세스 상태 모니터 핸들
+    /// 프로세스 상태 모니터 핸들 (kept for future process monitoring)
+    #[allow(dead_code)]
     process_monitor_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 

@@ -3,9 +3,11 @@
 //! ReAct (Reasoning + Acting) 패턴 Agent입니다.
 //! Thought → Action → Observation 루프를 반복합니다.
 
+#![allow(dead_code)]
+
 use super::registry::{AgentVariantInfo, BuiltinVariant, StrategiesInfo, VariantCategory};
 use crate::runtime::{
-    AgentCapability, AgentMetadata, AgentRuntime, ExecuteOutput, PlanOutput, ReflectOutput,
+    AgentCapability, AgentMetadata, AgentRuntime, ExecuteOutput, PlanOutput,
     RuntimeConfig, RuntimeContext, ThinkOutput,
 };
 use crate::strategy::{

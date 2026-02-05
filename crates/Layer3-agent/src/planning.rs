@@ -1,6 +1,8 @@
 //! Planning Mode - 계획 먼저, 실행 나중
 //!
 //! Claude Code Superpowers 스타일의 지능적인 계획 수립:
+#![allow(dead_code)]
+//!
 //! 1. 요청 분석
 //! 2. 계획 수립 (단계별)
 //! 3. 사용자 확인

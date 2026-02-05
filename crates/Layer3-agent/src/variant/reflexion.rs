@@ -3,6 +3,8 @@
 //! Reflexion 패턴 Agent입니다.
 //! 실행 후 자기 반성을 통해 개선합니다.
 
+#![allow(dead_code)]
+
 use super::registry::{AgentVariantInfo, BuiltinVariant, StrategiesInfo, VariantCategory};
 use crate::runtime::{
     AgentCapability, AgentMetadata, AgentRuntime, ExecuteOutput, PlanOutput, ReflectOutput,

@@ -247,7 +247,6 @@ pub trait Provider: Send + Sync {
     ) -> TokenCount {
         // Default implementation: estimate based on character count
         // Rough approximation: ~4 characters per token for English text
-        let mut total_chars = 0usize;
         let mut message_chars = 0usize;
         let mut tool_chars = 0usize;
         let mut system_chars = 0usize;
@@ -276,7 +275,7 @@ pub trait Provider: Send + Sync {
             system_chars = system.len();
         }
 
-        total_chars = message_chars + tool_chars + system_chars;
+        let total_chars = message_chars + tool_chars + system_chars;
 
         // Convert to tokens (rough estimate)
         let chars_per_token = 4;

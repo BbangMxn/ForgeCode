@@ -385,6 +385,8 @@ impl McpClient {
     }
 
     /// 연결 상태 확인 및 필요 시 재연결
+    /// Note: Reserved for future use in robust connection handling
+    #[allow(dead_code)]
     async fn ensure_connected(&mut self) -> Result<()> {
         let state = *self.state.read().await;
 

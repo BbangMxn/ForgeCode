@@ -2,6 +2,8 @@
 //!
 //! Agent 실행 중 공유되는 상태와 컨텍스트입니다.
 
+#![allow(dead_code)]
+
 use super::output::{ExecuteOutput, PlanOutput, ReflectOutput, ThinkOutput};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

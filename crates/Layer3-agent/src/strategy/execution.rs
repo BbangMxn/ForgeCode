@@ -6,6 +6,8 @@
 //! - Parallel: 병렬 실행
 //! - Adaptive: 상황에 따라 조절
 
+#![allow(dead_code)]
+
 use async_trait::async_trait;
 use forge_foundation::Result;
 use serde::{Deserialize, Serialize};

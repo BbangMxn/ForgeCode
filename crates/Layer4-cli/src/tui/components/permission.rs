@@ -3,6 +3,8 @@
 //! Displays a modal dialog for permission requests.
 //! Implements Layer1's PermissionDelegate trait for TUI.
 
+#![allow(dead_code)]
+
 use forge_foundation::permission::{PermissionAction, PermissionScope};
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Margin, Rect},

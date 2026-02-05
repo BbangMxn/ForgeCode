@@ -24,14 +24,10 @@
 //! let result = executor.execute("ls -la", &working_dir).await?;
 //! ```
 
-use crate::executor::r#trait::Executor;
-use crate::TaskResult;
-use async_trait::async_trait;
 use forge_foundation::Result;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tracing::{debug, info, warn};
 

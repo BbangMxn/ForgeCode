@@ -6,6 +6,8 @@
 //! - Tree-of-Thought (ToT)
 //! - ReAct (Reasoning + Acting)
 
+#![allow(dead_code)]
+
 use async_trait::async_trait;
 use forge_foundation::Result;
 use serde::{Deserialize, Serialize};

@@ -17,6 +17,8 @@
 //! let optimized = optimizer.optimize(&messages, &tool_results).await;
 //! ```
 
+#![allow(dead_code)]
+
 use std::collections::HashMap;
 use tracing::{debug, info};
 

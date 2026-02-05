@@ -8,6 +8,9 @@
 //! └────────────────────────────────────────────────────┘
 //! ```
 
+// TODO: This module is under development - will be used for syntax highlighting
+#![allow(dead_code)]
+
 use ratatui::{
     buffer::Buffer,
     layout::Rect,

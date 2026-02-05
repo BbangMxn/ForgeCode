@@ -157,10 +157,10 @@ impl Tokenizer for TiktokenEstimator {
         TokenCount::estimated(total, self.tokenizer_type).with_char_count(text.chars().count())
     }
 
-    fn encode(&self, text: &str) -> Result<EncodingResult, TokenizerError> {
+    fn encode(&self, _text: &str) -> Result<EncodingResult, TokenizerError> {
         #[cfg(feature = "tiktoken")]
         if let Some(ref encoder) = self.encoder {
-            let tokens = encoder.encode_with_special_tokens(text);
+            let tokens = encoder.encode_with_special_tokens(_text);
             return Ok(EncodingResult::new(
                 tokens.iter().map(|&t| t as u32).collect(),
             ));
@@ -171,10 +171,10 @@ impl Tokenizer for TiktokenEstimator {
         ))
     }
 
-    fn decode(&self, token_ids: &[u32]) -> Result<String, TokenizerError> {
+    fn decode(&self, _token_ids: &[u32]) -> Result<String, TokenizerError> {
         #[cfg(feature = "tiktoken")]
         if let Some(ref encoder) = self.encoder {
-            let ids: Vec<usize> = token_ids.iter().map(|&t| t as usize).collect();
+            let ids: Vec<usize> = _token_ids.iter().map(|&t| t as usize).collect();
             return encoder
                 .decode(ids)
                 .map_err(|e| TokenizerError::DecodingFailed(e.to_string()));
@@ -667,11 +667,11 @@ impl Tokenizer for LlamaEstimator {
         TokenCount::estimated(adjusted, TokenizerType::Llama).with_char_count(text.chars().count())
     }
 
-    fn encode(&self, text: &str) -> Result<EncodingResult, TokenizerError> {
+    fn encode(&self, _text: &str) -> Result<EncodingResult, TokenizerError> {
         #[cfg(feature = "hf-tokenizers")]
         if let Some(ref tokenizer) = self.tokenizer {
             let encoding = tokenizer
-                .encode(text, false)
+                .encode(_text, false)
                 .map_err(|e| TokenizerError::EncodingFailed(e.to_string()))?;
 
             return Ok(EncodingResult::new(encoding.get_ids().to_vec()));
@@ -682,11 +682,11 @@ impl Tokenizer for LlamaEstimator {
         ))
     }
 
-    fn decode(&self, token_ids: &[u32]) -> Result<String, TokenizerError> {
+    fn decode(&self, _token_ids: &[u32]) -> Result<String, TokenizerError> {
         #[cfg(feature = "hf-tokenizers")]
         if let Some(ref tokenizer) = self.tokenizer {
             return tokenizer
-                .decode(token_ids, true)
+                .decode(_token_ids, true)
                 .map_err(|e| TokenizerError::DecodingFailed(e.to_string()));
         }
 
@@ -842,8 +842,8 @@ mod tests {
     fn test_claude_learned_ratio() {
         let tokenizer = ClaudeEstimator::new();
 
-        // 학습 전 기본 추정
-        let before = tokenizer.count("Hello world").total;
+        // 학습 전 기본 추정 (kept for potential future comparison test)
+        let _before = tokenizer.count("Hello world").total;
 
         // 학습된 비율 업데이트 시뮬레이션
         tokenizer.update_learned_ratio("Hello world test", 3);

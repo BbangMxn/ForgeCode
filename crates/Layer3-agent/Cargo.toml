@@ -6,6 +6,11 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 
+[features]
+default = []
+# Disable token caching for testing/debugging
+no-cache = []
+
 [dependencies]
 # Internal - Layer1
 forge-foundation = { workspace = true }

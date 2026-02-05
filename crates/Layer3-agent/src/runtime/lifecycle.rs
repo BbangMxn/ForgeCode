@@ -2,6 +2,8 @@
 //!
 //! Agent의 실행 단계 및 생명주기 관리입니다.
 
+#![allow(dead_code)]
+
 use serde::{Deserialize, Serialize};
 use std::fmt;
 

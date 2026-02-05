@@ -341,8 +341,8 @@ impl AgentProvider for NativeAgentProvider {
 
     async fn query(
         &self,
-        prompt: &str,
-        options: AgentQueryOptions,
+        _prompt: &str,
+        _options: AgentQueryOptions,
     ) -> Result<AgentStream, AgentProviderError> {
         // TODO: Layer3 Agent와 연결
         // 현재는 placeholder
