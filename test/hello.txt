@@ -1,0 +1,2 @@
+Hello from ForgeCode!
+Built with Rust and AI
